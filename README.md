@@ -10,7 +10,7 @@ This fork of [karimkfoure/m8emu](https://github.com/karimkfoure/m8emu) adds a na
 
 ## Install
 
-Download `m8emu-0.1.0-macos.1-arm64.zip` from the [Releases page](https://github.com/yukij3/m8emu-macos/releases) (tag `v0.1.0-macos.1`), unzip it and open `m8emu.app`. It needs an Apple Silicon Mac with macOS 13 or later. The app is self-signed and isn't notarized, so macOS blocks the first launch. Allow it in System Settings > Privacy & Security (Open Anyway), or run `xattr -dr com.apple.quarantine m8emu.app`.
+A prebuilt app that ships without Dirtywave's firmware is on the way. For now, build from source as described below. Either way you need the official firmware file from Dirtywave's repository: [M8_V6_5_2C_HEADLESS.hex](https://github.com/Dirtywave/M8HeadlessFirmware/blob/main/Releases/M8_V6_5_2C_HEADLESS.hex). This project doesn't redistribute it.
 
 ## Build from source on macOS
 

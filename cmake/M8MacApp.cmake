@@ -29,6 +29,11 @@ else()
     file(GLOB libraries "${BUNDLE}/lib/*.dylib")
 endif()
 file(COPY ${libraries} DESTINATION "${contents}/Frameworks" FOLLOW_SYMLINK_CHAIN)
+# Sources, recipe and capstone of the on-device engine builder: no firmware
+# bytes or generated code, which the firmware-free check below still enforces.
+if(IS_DIRECTORY "${BUNDLE}/engine-src")
+    file(COPY "${BUNDLE}/engine-src" DESTINATION "${contents}/Resources")
+endif()
 if(NOT FIRMWARE_FREE)
     # SDL_GetBasePath() names Resources; runtime loaders look in its lib folder.
     file(CREATE_LINK "../Frameworks" "${contents}/Resources/lib" SYMBOLIC)
@@ -66,7 +71,7 @@ if(FIRMWARE_FREE)
 endif()
 # Editing load commands invalidates signatures; sign libraries, then the app.
 # "-" signs ad hoc; a keychain identity name signs without notarization.
-file(GLOB signed "${contents}/Frameworks/*.dylib")
+file(GLOB signed "${contents}/Frameworks/*.dylib" "${contents}/Resources/engine-src/python/capstone/lib/*.dylib")
 foreach(path IN LISTS signed ITEMS "${APP}")
     execute_process(COMMAND codesign --force --sign "${IDENTITY}" --timestamp=none "${path}"
         RESULT_VARIABLE result ERROR_VARIABLE output)

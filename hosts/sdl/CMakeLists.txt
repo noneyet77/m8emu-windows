@@ -343,4 +343,16 @@ if(APPLE AND M8_PORTABLE_BUNDLE AND TARGET m8emu)
         DEPENDS m8emu "${M8_ROOT}/cmake/M8MacApp.cmake" "${CMAKE_CURRENT_LIST_DIR}/Info.plist.in"
         BYPRODUCTS "${CMAKE_BINARY_DIR}/m8emu.app/Contents/MacOS/m8emu"
         COMMENT "Assemble m8emu.app" VERBATIM)
+    find_package(Python3 COMPONENTS Interpreter QUIET)
+    if(BUILD_TESTING AND M8_MACOS_APP_FIRMWARE_FREE AND M8_FIRMWARE_HEX AND Python3_Interpreter_FOUND)
+        # Two launches with a temporary HOME: the first asks for and stores
+        # the firmware, the second boots it directly; a user engine then loads.
+        set(m8_engine_args)
+        if(TARGET m8aot AND TARGET m8native-step AND TARGET m8native-regions)
+            set(m8_engine_args --engine-lib "${CMAKE_BINARY_DIR}/lib")
+        endif()
+        add_test(NAME firmware_launch COMMAND ${Python3_EXECUTABLE} -B "${CMAKE_CURRENT_LIST_DIR}/test_firmware_launch.py"
+            --binary "${CMAKE_BINARY_DIR}/m8emu.app/Contents/MacOS/m8emu" --hex "${M8_FIRMWARE_HEX}" ${m8_engine_args})
+        set_tests_properties(firmware_launch PROPERTIES TIMEOUT 600)
+    endif()
 endif()

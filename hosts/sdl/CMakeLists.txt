@@ -310,12 +310,13 @@ if(M8_PORTABLE_BUNDLE AND TARGET m8emu)
     endif()
 endif()
 if(APPLE AND M8_PORTABLE_BUNDLE AND TARGET m8emu)
-    # Signed, self-contained m8emu.app beside the bundle. It loads the same
-    # firmware and libraries from Contents/Resources and Contents/Frameworks.
+    # Signed, self-contained m8emu.app beside the bundle. Firmware-free by
+    # default: see M8_MACOS_APP_FIRMWARE_FREE in cmake/M8Firmware.cmake.
     set(M8_CODESIGN_IDENTITY "-" CACHE STRING "macOS code-signing identity for m8emu.app; - signs ad hoc")
     add_custom_target(m8emu-app ALL
         COMMAND ${CMAKE_COMMAND} "-DAPP=${CMAKE_BINARY_DIR}/m8emu.app" "-DBUNDLE=${CMAKE_BINARY_DIR}"
             "-DPLIST=${CMAKE_CURRENT_LIST_DIR}/Info.plist.in" "-DVERSION=${PROJECT_VERSION}" "-DIDENTITY=${M8_CODESIGN_IDENTITY}"
+            "-DFIRMWARE_FREE=${M8_MACOS_APP_FIRMWARE_FREE}" "-DFIRMWARE_SHA256=${M8_FIRMWARE_BIN_SHA256}"
             -P "${M8_ROOT}/cmake/M8MacApp.cmake"
         DEPENDS m8emu "${M8_ROOT}/cmake/M8MacApp.cmake" "${CMAKE_CURRENT_LIST_DIR}/Info.plist.in"
         BYPRODUCTS "${CMAKE_BINARY_DIR}/m8emu.app/Contents/MacOS/m8emu"

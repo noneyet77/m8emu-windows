@@ -4,6 +4,12 @@ include_guard(GLOBAL)
 set(M8_FIRMWARE_COMMIT "2392d93f39fa0ac9ae6fcbf46a4d758421b60695")
 set(M8_FIRMWARE_HEX_SHA256 "434dd3d2e06765b4c3c523f21142bc57cd0811b6a7dc6a7b9596876fcb744f5c")
 set(M8_FIRMWARE_BIN_SHA256 "20498b7637cee17baae249372db3b8377afd4e12a5e7062754c2ddd83621367f")
+# Dirtywave's EULA forbids redistributing the firmware or works derived from
+# it. A distributable m8emu.app therefore holds neither the firmware nor the
+# libraries generated from it; the app asks for the user's own download and
+# runs the reference engine until an engine is built on that machine. OFF
+# restores the self-contained developer app.
+option(M8_MACOS_APP_FIRMWARE_FREE "Assemble m8emu.app without firmware or firmware-derived libraries" ON)
 get_filename_component(_M8_FIRMWARE_ROOT "${CMAKE_CURRENT_LIST_DIR}/.." ABSOLUTE)
 set(_M8_FIRMWARE_CONVERTER "${CMAKE_CURRENT_LIST_DIR}/firmware.py")
 set(_M8_FIRMWARE_MODULE "${CMAKE_CURRENT_LIST_FILE}")

@@ -53,6 +53,7 @@ function(m8_pgo_orchestrate result)
         set(app_command COMMAND "${CMAKE_COMMAND}" "-DAPP=${CMAKE_BINARY_DIR}/m8emu.app"
             "-DBUNDLE=${CMAKE_BINARY_DIR}" "-DPLIST=${CMAKE_SOURCE_DIR}/hosts/sdl/Info.plist.in"
             "-DVERSION=${PROJECT_VERSION}" "-DIDENTITY=${M8_CODESIGN_IDENTITY}"
+            "-DFIRMWARE_FREE=${M8_MACOS_APP_FIRMWARE_FREE}" "-DFIRMWARE_SHA256=${M8_FIRMWARE_BIN_SHA256}"
             -P "${CMAKE_SOURCE_DIR}/cmake/M8MacApp.cmake")
     endif()
     add_custom_target(m8emu ALL

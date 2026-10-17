@@ -12,6 +12,8 @@
 #include "native.h"
 #include "native_boot.h"
 #include "engine_select.h"
+#include "engine_builder.h"
+#include "engine_view.h"
 #include "firmware.h"
 #include "firmware_view.h"
 #include "user_paths.h"
@@ -53,7 +55,7 @@ typedef struct options {
     unsigned slice_us, fps, render_stall_ms, display_kib, poll_ms, audio_frames;
     int headless, simulated, consumer_selected, demo, smoke, latency, read_only, play, no_play, overwrite, fullscreen, aot_timing, integer_scale, expect_silence, native_engine, native_boot;
     int native_requested, queue_selected;
-    int video_probe, host_info, vsync, title_stats;
+    int video_probe, host_info, vsync, title_stats, build_engine;
     unsigned window_scale;
     const char *record_log;
     unsigned profile_hz;
@@ -96,6 +98,7 @@ typedef struct pcm_capture {
 static void usage(void) {
     puts("m8emu [--firmware PATH] [--card PATH | --image PATH | --demo simple]\n"
          "  --install-firmware PATH Verify Dirtywave's 6.5.2C .hex or .bin, store it, exit\n"
+         "  --build-engine         Build the native engine from the firmware on this Mac, exit\n"
          "  --headless             No window; simulated audio by default\n"
          "  --consumer sdl|simulated Select the audio consumer\n"
          "  --fullscreen           Fit the display; suitable for KMSDRM\n"
@@ -201,6 +204,7 @@ static int parse(int argc, char **argv, options *o) {
         else if (!strcmp(a, "--native-boot")) o->native_boot = 1;
         else if (!strcmp(a, "--no-native-boot")) o->native_boot = 0;
         else if (!strcmp(a, "--host-pmu")) o->host_pmu = 1;
+        else if (!strcmp(a, "--build-engine")) o->build_engine = 1;
         else {
             if (++i >= argc) { fprintf(stderr, "Missing value for %s\n", a); return -1; }
             const char *v = argv[i];
@@ -586,6 +590,13 @@ int main(int argc, char **argv) {
         }
         if (!o.firmware) firmware_source = "picker";
     }
+    if (o.build_engine) {
+        int built = 1;
+        if (o.firmware) built = m8_engine_builder_run(o.firmware);
+        else fputs("first_failure=No M8 Headless firmware; run m8emu --install-firmware FILE first\n", stderr);
+        free(user_firmware); SDL_free(bundled_firmware);
+        return built;
+    }
     signal(SIGINT, request_stop);
     signal(SIGTERM, request_stop);
     m8_session s = {0};
@@ -714,6 +725,7 @@ int main(int argc, char **argv) {
     /* Generated libraries derive from the firmware: CLI/environment, the
      * user's folder for this firmware, bundled lib/, else the reference engine. */
     m8_engine_locate(explicit_engine(&o), *firmware_sha ? firmware_sha : NULL, &engine);
+    if (*engine.rejected) fprintf(stderr, "user_engine_rejected=\"%s\"\n", engine.rejected);
     if (engine.source == M8_ENGINE_USER) {
         o.aot = engine.aot; o.native_library = engine.step; o.native_regions = engine.regions;
     } else if (engine.source == M8_ENGINE_NONE && !o.native_requested) {
@@ -771,6 +783,8 @@ int main(int argc, char **argv) {
         snprintf(label, sizeof label, "%s %s", !strcmp(firmware_sha, M8_FIRMWARE_BIN_SHA256) ? M8_FIRMWARE_VERSION : "CUSTOM",
                  !strcmp(firmware_source, "bundled") ? "BUNDLED" : !strcmp(firmware_source, "cli") ? "FILE" : "OK");
         m8_firmware_view_set_firmware(label);
+        m8_engine_view_attach(&ctx, o.firmware, engine.source == M8_ENGINE_USER,
+                              o.smoke || o.picker_smoke ? NULL : engine.rejected);
     }
     /* Only the reference engine uses its own ring default. */
     if (!strcmp(engine_name, "reference") && !o.queue_selected) o.queue_ms = M8_REFERENCE_AUDIO_QUEUE_MS;
@@ -939,6 +953,7 @@ int main(int argc, char **argv) {
             SDL_AppResult ev = SDL_AppEvent(&ctx, &event);
             if (ev != SDL_APP_CONTINUE) ctx.app_state = QUIT;
         }
+        if (rendered) m8_engine_view_tick();
         if (m8_process_data(&ctx.conf) == DEVICE_FATAL_ERROR) { snprintf(error, sizeof error, "Host input queue full"); goto close; }
         if (drain_display(worker, rendered)) { snprintf(error, sizeof error, "Display decode failed"); goto close; }
         if (rendered && now-last_render >= UINT64_C(1000000000)/o.fps) {
@@ -1029,6 +1044,7 @@ int main(int argc, char **argv) {
     if (*delivery_error) snprintf(error, sizeof error, "%s", delivery_error);
     else result = 0;
 close:
+    m8_engine_view_shutdown();
     m8_worker_stop(worker); m8_worker_join(worker);
     if (profile.output && fclose(profile.output)) {
         snprintf(error, sizeof error, "Guest profile close failed: error=%d", errno);

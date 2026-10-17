@@ -4,7 +4,8 @@
 1. No firmware: the firmware screen opens; the official HEX is dropped on it,
    verified, stored, and the guest boots.
 2. Relaunch: the stored copy is re-verified and the guest boots directly.
-3. A user-built engine in engine/<sha>/ loads automatically (with --engine-lib).
+3. A user-built engine in engine/<sha>/ loads automatically (with --engine-lib);
+   with the builder bundled, only under a matching engine.json stamp.
 4. A damaged stored copy is refused: headless fails clearly, the window asks again.
 Video is SDL's dummy driver and audio the simulated consumer; nothing plays.
 """
@@ -13,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import os
 from pathlib import Path
 import shutil
@@ -75,9 +77,24 @@ def main() -> None:
             engine.mkdir(parents=True)
             for name in ENGINE:
                 shutil.copy2(Path(args.engine_lib) / (name + SUFFIX), engine / (name + SUFFIX))
+            # The stamp engine_build.py writes last; engine_select.c checks it.
+            identity = Path(args.binary).resolve().parent.parent / "Resources/engine-src/ENGINE_ID"
+            if identity.is_file():
+                files = {name + SUFFIX: {"size": (engine / (name + SUFFIX)).stat().st_size,
+                                         "sha256": hashlib.sha256((engine / (name + SUFFIX)).read_bytes()).hexdigest()}
+                         for name in ENGINE}
+                stamp = {"schema": "m8-user-engine/1", "engine_id": identity.read_text().strip(),
+                         "firmware_sha256": BIN_SHA256, "files": files}
+                (engine / "engine.json").write_text(json.dumps(stamp, indent=2) + "\n")
             code, out = run(args.binary, home)
             expect(code == 0 and "firmware_picker" not in out and "engine=native engine_source=user" in out,
                    "launch 3 loads the user-built engine", out)
+            if identity.is_file():
+                stamp["engine_id"] = "0" * 64
+                (engine / "engine.json").write_text(json.dumps(stamp, indent=2) + "\n")
+                code, out = run(args.binary, home)
+                expect(code == 0 and "BUILT BY ANOTHER APP VERSION" in out and "engine=reference" in out,
+                       "an engine stamped by another app version falls back to the reference engine", out)
             shutil.rmtree(data / "engine")
 
         image = bytearray(stored.read_bytes())

@@ -136,6 +136,7 @@ add_executable(m8emu main.c metrics.c profiling.c
   ${COMMON}/aot.c ${COMMON}/native.c ${COMMON}/native_boot.c ${COMMON}/session_script.c
   ${COMMON}/queue.c ${COMMON}/worker.c ${PLATFORM}/thread_policy.c ${COMMON}/handheld.c ${COMMON}/gamepad_view.c
   ${COMMON}/m8_ui.c ${COMMON}/firmware.c ${COMMON}/firmware_view.c ${COMMON}/user_paths.c ${COMMON}/engine_select.c
+  ${COMMON}/engine_builder.c ${COMMON}/engine_view.c
   ${STORAGE}/card.c ${PLATFORM}/card_platform_posix.c ${COMMON}/demo.c ${COMMON}/session.c
   ${STORAGE}/media.c ${PLATFORM}/media_platform_posix.c ${COMMON}/render_platform.c ${COMMON}/host_probe.c)
 target_include_directories(m8emu PRIVATE ${COMMON} ${M8RT}/third_party ${PLATFORM})

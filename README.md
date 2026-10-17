@@ -2,6 +2,8 @@
 
 This is m8emu reworked to run natively on macOS.
 
+<img src="assets/screenshots/phrase.png" width="480" alt="The M8 phrase screen running in m8emu">
+
 m8emu is an unofficial emulator of the Dirtywave M8 Headless. It runs the original 6.5.2C firmware without a Teensy. The firmware's Thumb-2 code is translated to C ahead of time and compiled into the emulator, with Unicorn kept as the reference and fallback engine. [Architecture](docs/architecture.md) explains how execution and timing work.
 
 This fork of [karimkfoure/m8emu](https://github.com/karimkfoure/m8emu) adds a native Apple Silicon port on top of upstream v0.1.0. The port has been sent upstream as a pull request.
@@ -57,6 +59,12 @@ Linux works as upstream: `cmake --preset linux` (GCC, with PGO) or `cmake --pres
 USB and Bluetooth gamepads work through SDL3 and GameController.framework: DualSense, DualShock 4, Xbox, Switch Pro, 8BitDo and others. You can connect a pad while the emulator runs, and if it disconnects, any buttons it was holding are released. By default the D-pad moves, the face buttons map by position (west SHIFT, north PLAY, east OPTION, south EDIT) and Back+Start exits.
 
 The gamepad view is drawn like an M8 screen. Open it with F3, Cmd+G, or a tap on the pad's Back/Share/View button. SHIFT+LEFT/RIGHT switches between its three pages, and OPTION saves and closes it.
+
+<p>
+  <img src="assets/screenshots/gamepads.png" width="32%" alt="GAMEPADS page: connected pads and the active one">
+  <img src="assets/screenshots/mapping.png" width="32%" alt="GAMEPAD MAPPING page waiting for a button for SHIFT">
+  <img src="assets/screenshots/settings.png" width="32%" alt="GAMEPAD SETTINGS page">
+</p>
 
 - GAMEPADS picks the active pad.
 - GAMEPAD MAPPING: press EDIT on an action, then the button you want. LEARN ALL goes through every action and DEFAULTS resets them. A button that is already bound swaps places with the old one. OPTION+EDIT clears a binding.

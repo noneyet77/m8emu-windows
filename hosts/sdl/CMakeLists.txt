@@ -341,7 +341,7 @@ if(APPLE AND M8_PORTABLE_BUNDLE AND TARGET m8emu)
             "-DPLIST=${CMAKE_CURRENT_LIST_DIR}/Info.plist.in" "-DVERSION=${PROJECT_VERSION}" "-DIDENTITY=${M8_CODESIGN_IDENTITY}"
             "-DFIRMWARE_FREE=${M8_MACOS_APP_FIRMWARE_FREE}" "-DFIRMWARE_SHA256=${M8_FIRMWARE_BIN_SHA256}"
             -P "${M8_ROOT}/cmake/M8MacApp.cmake"
-        DEPENDS m8emu "${M8_ROOT}/cmake/M8MacApp.cmake" "${CMAKE_CURRENT_LIST_DIR}/Info.plist.in"
+        DEPENDS m8emu "${M8_ROOT}/cmake/M8MacApp.cmake" "${CMAKE_CURRENT_LIST_DIR}/Info.plist.in" "${CMAKE_CURRENT_LIST_DIR}/m8emu.icns"
         BYPRODUCTS "${CMAKE_BINARY_DIR}/m8emu.app/Contents/MacOS/m8emu"
         COMMENT "Assemble m8emu.app" VERBATIM)
     find_package(Python3 COMPONENTS Interpreter QUIET)

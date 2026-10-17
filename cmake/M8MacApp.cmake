@@ -28,6 +28,8 @@ else()
     file(COPY "${BUNDLE}/firmware" "${BUNDLE}/gamecontrollerdb.txt" DESTINATION "${contents}/Resources")
     file(GLOB libraries "${BUNDLE}/lib/*.dylib")
 endif()
+get_filename_component(host "${PLIST}" DIRECTORY)
+file(COPY "${host}/m8emu.icns" DESTINATION "${contents}/Resources")
 file(COPY ${libraries} DESTINATION "${contents}/Frameworks" FOLLOW_SYMLINK_CHAIN)
 # Sources, recipe and capstone of the on-device engine builder: no firmware
 # bytes or generated code, which the firmware-free check below still enforces.

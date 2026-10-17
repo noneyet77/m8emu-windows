@@ -5,6 +5,7 @@
   <key>CFBundleDevelopmentRegion</key><string>en</string>
   <key>CFBundleDisplayName</key><string>m8emu</string>
   <key>CFBundleExecutable</key><string>m8emu</string>
+  <key>CFBundleIconFile</key><string>m8emu</string>
   <key>CFBundleIdentifier</key><string>io.github.karimkfoure.m8emu</string>
   <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
   <key>CFBundleName</key><string>m8emu</string>
@@ -14,6 +15,7 @@
   <key>LSApplicationCategoryType</key><string>public.app-category.music</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>
   <key>NSHighResolutionCapable</key><true/>
+  <key>NSHumanReadableCopyright</key><string>Made by Dmitry Tretyakov with ♥ · Based on m8emu by karimkfoure</string>
   <key>NSSupportsAutomaticGraphicsSwitching</key><true/>
 </dict>
 </plist>

@@ -20,7 +20,14 @@ This fork of [karimkfoure/m8emu](https://github.com/karimkfoure/m8emu) adds a na
 
 <img src="assets/screenshots/firmware.png" width="480" alt="The firmware screen on first launch">
 
-Out of the box the firmware runs on the Unicorn reference engine, about three times faster than real time, with a 20 ms audio buffer. For the native engine, press F4 to open the firmware screen and choose BUILD NATIVE ENGINE. It needs the Xcode Command Line Tools (the app offers to install them) and takes about five minutes. The engine is generated from your own firmware on your Mac and saved in `~/Library/Application Support/m8-live/engine/`. After a restart it loads automatically, runs about ten times faster than real time and uses a 12 ms buffer. Without a window, run `m8emu --build-engine`.
+Out of the box the firmware runs on the Unicorn reference engine, about three times faster than real time, with a 20 ms audio buffer. The native engine runs about ten times faster than real time with a 12 ms buffer. It is generated from your own firmware on your Mac, which takes about five minutes:
+
+```sh
+xcode-select --install                                   # once: Apple's command line tools
+/Applications/m8emu.app/Contents/MacOS/m8emu --build-engine
+```
+
+You can also do both from the app: press F4 to open the firmware screen, where the ENGINE row offers INSTALL COMMAND LINE TOOLS and then BUILD NATIVE ENGINE. The engine is saved in `~/Library/Application Support/m8-live/engine/` and loads automatically from the next launch on.
 
 ## Build from source on macOS
 

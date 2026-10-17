@@ -5,6 +5,7 @@ Plan.wrap accepts instruction/transaction rows. The translator must append the
 unchanged next-unit jump after the guarded rows, then scalarize the function.
 Use an explicit translator option; this module does not enable itself.
 """
+from __future__ import annotations
 from dataclasses import dataclass
 import re
 

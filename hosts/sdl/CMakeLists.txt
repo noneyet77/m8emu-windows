@@ -62,6 +62,19 @@ if(NOT M8_NATIVE_AUDIO_QUEUE_MS MATCHES "^[0-9]+$" OR
     M8_NATIVE_AUDIO_QUEUE_MS LESS 5 OR M8_NATIVE_AUDIO_QUEUE_MS GREATER 1000)
   message(FATAL_ERROR "M8_NATIVE_AUDIO_QUEUE_MS requires an integer in 5..1000: actual=${M8_NATIVE_AUDIO_QUEUE_MS}")
 endif()
+# Without generated libraries the guest runs 1.8-3.6x real time on an Apple M5
+# (native: 9.6-11.8x). 12 ms had no shortage in 30 s runs, idle or beside a
+# build, but one short run beside a build did; 20 ms costs 8 ms of latency only
+# in this fallback mode.
+set(m8_reference_audio_queue_default ${M8_NATIVE_AUDIO_QUEUE_MS})
+if(m8_reference_audio_queue_default LESS 20)
+  set(m8_reference_audio_queue_default 20)
+endif()
+set(M8_REFERENCE_AUDIO_QUEUE_MS ${m8_reference_audio_queue_default} CACHE STRING "Default ring in milliseconds when no generated engine is found")
+if(NOT M8_REFERENCE_AUDIO_QUEUE_MS MATCHES "^[0-9]+$" OR
+    M8_REFERENCE_AUDIO_QUEUE_MS LESS 5 OR M8_REFERENCE_AUDIO_QUEUE_MS GREATER 1000)
+  message(FATAL_ERROR "M8_REFERENCE_AUDIO_QUEUE_MS requires an integer in 5..1000: actual=${M8_REFERENCE_AUDIO_QUEUE_MS}")
+endif()
 set(M8_NATIVE_POLL_MS ${m8_native_poll_default} CACHE STRING "Default main-thread sleep in milliseconds")
 if(NOT M8_NATIVE_POLL_MS MATCHES "^[0-9]+$" OR
     M8_NATIVE_POLL_MS LESS 1 OR M8_NATIVE_POLL_MS GREATER 20)
@@ -122,6 +135,7 @@ add_executable(m8emu main.c metrics.c profiling.c
   ${COMMON}/audio.c ${COMMON}/audio_clock_sdl.c ${COMMON}/bridge.c
   ${COMMON}/aot.c ${COMMON}/native.c ${COMMON}/native_boot.c ${COMMON}/session_script.c
   ${COMMON}/queue.c ${COMMON}/worker.c ${PLATFORM}/thread_policy.c ${COMMON}/handheld.c ${COMMON}/gamepad_view.c
+  ${COMMON}/m8_ui.c ${COMMON}/firmware.c ${COMMON}/firmware_view.c ${COMMON}/user_paths.c ${COMMON}/engine_select.c
   ${STORAGE}/card.c ${PLATFORM}/card_platform_posix.c ${COMMON}/demo.c ${COMMON}/session.c
   ${STORAGE}/media.c ${PLATFORM}/media_platform_posix.c ${COMMON}/render_platform.c ${COMMON}/host_probe.c)
 target_include_directories(m8emu PRIVATE ${COMMON} ${M8RT}/third_party ${PLATFORM})
@@ -132,7 +146,8 @@ endif()
 target_compile_definitions(m8emu PRIVATE M8_NATIVE_APP_DEFAULT=$<BOOL:${M8_NATIVE_APP_DEFAULT}>
   M8_NATIVE_BOOT_DEFAULT=$<BOOL:${M8_NATIVE_BOOT_DEFAULT}>
   M8_NATIVE_DEADLINE_YIELD_DEFAULT=$<BOOL:${M8_NATIVE_DEADLINE_YIELD_DEFAULT}>
-  M8_NATIVE_AUDIO_QUEUE_MS=${M8_NATIVE_AUDIO_QUEUE_MS} M8_NATIVE_POLL_MS=${M8_NATIVE_POLL_MS})
+  M8_NATIVE_AUDIO_QUEUE_MS=${M8_NATIVE_AUDIO_QUEUE_MS} M8_REFERENCE_AUDIO_QUEUE_MS=${M8_REFERENCE_AUDIO_QUEUE_MS}
+  M8_NATIVE_POLL_MS=${M8_NATIVE_POLL_MS})
 target_link_libraries(m8emu PRIVATE m8c_embedded ${M8_RUNTIME_TARGET} SDL3::SDL3)
 if(UNIX)
   target_link_libraries(m8emu PRIVATE m ${CMAKE_DL_LIBS})
@@ -145,6 +160,13 @@ if(NOT M8_FIRMWARE_BIN)
   m8emu_prepare_firmware()
 endif()
 set(M8_FIRMWARE "${M8_FIRMWARE_BIN}")
+if(NOT M8_FIRMWARE_HEX_SHA256 OR NOT M8_FIRMWARE_BIN_SHA256)
+  message(FATAL_ERROR "cmake/M8Firmware.cmake must define the firmware pins before hosts/sdl")
+endif()
+# The firmware screen verifies the user's file against the same pins.
+target_compile_definitions(m8emu PRIVATE M8_FIRMWARE_HEX_SHA256="${M8_FIRMWARE_HEX_SHA256}"
+  M8_FIRMWARE_BIN_SHA256="${M8_FIRMWARE_BIN_SHA256}")
+set_source_files_properties(${COMMON}/firmware.c PROPERTIES INCLUDE_DIRECTORIES "${M8_ROOT}/pgo")
 target_compile_definitions(m8emu PRIVATE M8_DEFAULT_FIRMWARE="")
 set_target_properties(m8emu PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 add_dependencies(m8emu m8emu-firmware)

@@ -11,6 +11,11 @@
 #include "aot.h"
 #include "native.h"
 #include "native_boot.h"
+#include "engine_select.h"
+#include "firmware.h"
+#include "firmware_view.h"
+#include "user_paths.h"
+#include "settings.h"
 #include "metrics.h"
 #include "profiling.h"
 #include "thread_policy.h"
@@ -43,9 +48,11 @@ static void request_stop(int signal_number) {
 extern SDL_AppResult SDL_AppEvent(void *, SDL_Event *);
 typedef struct options {
     const char *firmware, *card, *image, *config, *import_folder, *export_folder, *aot, *project, *pcm, *host_cpus, *guest_cpu, *native_library, *native_regions, *native_boot_library, *session_script, *session_output;
+    const char *install_firmware, *picker_smoke;
     double seconds, queue_ms;
     unsigned slice_us, fps, render_stall_ms, display_kib, poll_ms, audio_frames;
     int headless, simulated, consumer_selected, demo, smoke, latency, read_only, play, no_play, overwrite, fullscreen, aot_timing, integer_scale, expect_silence, native_engine, native_boot;
+    int native_requested, queue_selected;
     int video_probe, host_info, vsync, title_stats;
     unsigned window_scale;
     const char *record_log;
@@ -71,6 +78,10 @@ typedef struct pcm_capture {
 #ifndef M8_NATIVE_AUDIO_QUEUE_MS
 #define M8_NATIVE_AUDIO_QUEUE_MS 20
 #endif
+/* The reference engine (no generated libraries) has less headroom. */
+#ifndef M8_REFERENCE_AUDIO_QUEUE_MS
+#define M8_REFERENCE_AUDIO_QUEUE_MS M8_NATIVE_AUDIO_QUEUE_MS
+#endif
 #ifndef M8_NATIVE_POLL_MS
 #define M8_NATIVE_POLL_MS 1
 #endif
@@ -84,6 +95,7 @@ typedef struct pcm_capture {
 #define M8_STRING_VALUE(value) M8_STRING_VALUE_(value)
 static void usage(void) {
     puts("m8emu [--firmware PATH] [--card PATH | --image PATH | --demo simple]\n"
+         "  --install-firmware PATH Verify Dirtywave's 6.5.2C .hex or .bin, store it, exit\n"
          "  --headless             No window; simulated audio by default\n"
          "  --consumer sdl|simulated Select the audio consumer\n"
          "  --fullscreen           Fit the display; suitable for KMSDRM\n"
@@ -122,27 +134,46 @@ static void usage(void) {
          "  --pcm-tap PATH         Capture guest live PCM, including ring prefill\n"
          "  --seconds N            Stop after N live seconds (headless default: 60)\n"
          "  --client-smoke         Dummy video; verify one DOWN press and release\n"
+         "  --picker-smoke PATH    Dummy video; drop PATH on the firmware screen if shown\n"
          "  --latency-test         Measure a stopped demo note at the consumer\n"
          "  --read-only            Reject guest writes; do not save the card\n"
          "  --import DIRECTORY     Merge into private card storage before boot\n"
          "  --overwrite            Permit imported files to replace card files\n"
          "  --export DIRECTORY     Export the card without booting, to a new/empty folder\n"
-         "  --queue-ms N           Ring capacity, 5..1000 ms (default: " M8_STRING_VALUE(M8_NATIVE_AUDIO_QUEUE_MS) ")\n"
+         "  --queue-ms N           Ring capacity, 5..1000 ms (default: " M8_STRING_VALUE(M8_NATIVE_AUDIO_QUEUE_MS)
+         ", reference engine " M8_STRING_VALUE(M8_REFERENCE_AUDIO_QUEUE_MS) ")\n"
          "  --slice-us N           Guest slice, 100..10000 us (default: 3000)\n"
          "  --config NAME          m8c config file in its SDL preference directory\n"
          "  --play / --no-play     Start playback / leave transport stopped\n"
-         "The default card is $XDG_DATA_HOME/m8-live/card.img or\n"
+         "The data folder is $XDG_DATA_HOME/m8-live or\n"
 #ifdef __APPLE__
-         "$HOME/Library/Application Support/m8-live/card.img. Clean exit saves it with .bak.");
+         "$HOME/Library/Application Support/m8-live. The default card is card.img there;\n"
 #else
-         "$HOME/.local/share/m8-live/card.img. Clean exit saves it with .bak.");
+         "$HOME/.local/share/m8-live. The default card is card.img there;\n"
 #endif
+         "clean exit saves it with .bak. Without --firmware, the firmware is\n"
+         "firmware/" M8_USER_FIRMWARE_NAME " there, else firmware/ beside the program;\n"
+         "a window asks for it when neither exists. Generated engine libraries\n"
+         "load from engine/<firmware SHA-256>/ there, else lib/ beside the program;\n"
+         "without them the reference engine runs.");
 }
 static double number(const char *s) {
     char *end;
     errno = 0;
     double value = strtod(s, &end);
     return errno || end == s || *end || !isfinite(value) ? -1 : value;
+}
+static int explicit_engine(const options *o) {
+    return o->aot || o->native_library || o->native_regions || getenv("M8RT_AOT_LIBRARY") ||
+           getenv("M8RT_NATIVE_LIBRARY") || getenv("M8RT_NATIVE_REGIONS");
+}
+/* The engine the supported firmware would get, before it is installed. */
+static const char *engine_preview(const options *o) {
+    m8_engine_paths paths;
+    m8_engine_locate(explicit_engine(o), M8_FIRMWARE_BIN_SHA256, &paths);
+    m8_engine_paths_free(&paths);
+    if ((o->aot && !*o->aot) || paths.source == M8_ENGINE_NONE) return "REFERENCE";
+    return o->native_engine ? "NATIVE" : "AOT";
 }
 static int parse(int argc, char **argv, options *o) {
     *o = (options){.firmware=M8_DEFAULT_FIRMWARE, .seconds=-1, .queue_ms=M8_NATIVE_AUDIO_QUEUE_MS, .slice_us=3000, .fps=60, .display_kib=256, .poll_ms=M8_NATIVE_POLL_MS, .audio_frames=M8_AUDIO_FRAMES_DEFAULT, .native_engine=-1, .native_boot=-1, .vsync=-1};
@@ -174,6 +205,8 @@ static int parse(int argc, char **argv, options *o) {
             if (++i >= argc) { fprintf(stderr, "Missing value for %s\n", a); return -1; }
             const char *v = argv[i];
             if (!strcmp(a, "--firmware")) o->firmware = v;
+            else if (!strcmp(a, "--install-firmware")) o->install_firmware = v;
+            else if (!strcmp(a, "--picker-smoke")) o->picker_smoke = v;
             else if (!strcmp(a, "--record-log")) o->record_log = v;
             else if (!strcmp(a, "--window-scale")) {
                 double n = number(v);
@@ -232,7 +265,7 @@ static int parse(int argc, char **argv, options *o) {
                 else return -1;
             } else if (!strcmp(a, "--seconds")) {
                 o->seconds = number(v); if (o->seconds <= 0) return -1;
-            } else if (!strcmp(a, "--queue-ms")) o->queue_ms = number(v);
+            } else if (!strcmp(a, "--queue-ms")) { o->queue_ms = number(v); o->queue_selected = 1; }
             else if (!strcmp(a, "--display-queue-kib")) {
                 double n = number(v);
                 if (floor(n) != n || n < 4 || n > 1024) return -1;
@@ -253,12 +286,19 @@ static int parse(int argc, char **argv, options *o) {
         }
     }
     if (o->video_probe || o->host_info) return o->video_probe && o->host_info ? -1 : 0;
+    if (o->install_firmware) return 0;
+    if (o->picker_smoke && (o->headless || o->smoke || o->session_script || o->latency)) {
+        fputs("--picker-smoke needs a window and no other smoke mode\n", stderr);
+        return -1;
+    }
     if ((o->profile_hz || o->host_pmu || o->pmu_sample) != (o->profile_output != NULL) ||
         (o->profile_output && (o->session_script || o->export_folder || o->latency || o->smoke))) {
         fputs("Live guest profiling needs --profile-output and no session, export, latency or smoke mode\n", stderr);
         return -1;
     }
     char native_error[256];
+    const char *native_env = getenv("M8_NATIVE_ENGINE");
+    o->native_requested = o->native_engine == 1 || (o->native_engine < 0 && native_env && !strcmp(native_env, "1"));
     o->native_engine = m8_host_native_choose(o->native_engine, getenv("M8_NATIVE_ENGINE"),
                                             M8_NATIVE_APP_DEFAULT, native_error, sizeof native_error);
     if (o->native_engine < 0) {
@@ -512,16 +552,39 @@ int main(int argc, char **argv) {
     if (parsed) { if (parsed < 0) usage(); return parsed < 0 ? 2 : 0; }
     if (o.host_info) return m8_host_info(stdout);
     if (o.video_probe) return m8_host_video_probe(stdout, o.fullscreen, o.integer_scale, o.vsync);
-    char automatic_firmware[4096];
+    char *user_firmware = m8_user_firmware_path(), *bundled_firmware = NULL;
+    if (o.install_firmware) {
+        char detail[512];
+        m8_firmware_status installed = user_firmware ?
+            m8_firmware_install(o.install_firmware, user_firmware, detail, sizeof detail) : M8_FIRMWARE_WRITE;
+        if (!user_firmware) snprintf(detail, sizeof detail, "Neither XDG_DATA_HOME nor HOME is set");
+        if (installed == M8_FIRMWARE_OK) printf("firmware_installed=%s version=" M8_FIRMWARE_VERSION " sha256=" M8_FIRMWARE_BIN_SHA256 "\n", user_firmware);
+        else fprintf(stderr, "first_failure=%s%s\n", installed == M8_FIRMWARE_WRONG ?
+                     "Wrong firmware: M8 Headless " M8_FIRMWARE_VERSION " is required. " : "", detail);
+        free(user_firmware);
+        return installed == M8_FIRMWARE_OK ? 0 : 1;
+    }
+    /* --firmware, then the user's verified copy, then a copy beside the
+     * program (developer and Linux bundles). Distributed apps hold none; the
+     * firmware screen asks for Dirtywave's file before the guest starts. */
+    const char *firmware_source = "cli", *firmware_notice = NULL;
+    char firmware_sha[65] = "";
     if (!o.firmware || !o.firmware[0]) {
-        const char *base = SDL_GetBasePath();
-        int size = base ? snprintf(automatic_firmware, sizeof automatic_firmware,
-                                  "%sfirmware/M8_V6_5_2C_HEADLESS.bin", base) : -1;
-        if (size < 0 || (size_t)size >= sizeof automatic_firmware) {
-            fputs("Cannot find the bundled firmware path\n", stderr);
-            return 2;
+        SDL_PathInfo info;
+        o.firmware = NULL;
+        if (user_firmware && SDL_GetPathInfo(user_firmware, &info)) {
+            if (m8_firmware_verified(user_firmware)) { o.firmware = user_firmware; firmware_source = "user"; }
+            else {
+                firmware_notice = "STORED FIRMWARE FAILED ITS CHECK";
+                fprintf(stderr, "firmware_rejected=%s reason=sha256\n", user_firmware);
+            }
         }
-        o.firmware = automatic_firmware;
+        const char *base = SDL_GetBasePath();
+        if (!o.firmware && base && SDL_asprintf(&bundled_firmware, "%sfirmware/" M8_USER_FIRMWARE_NAME, base) >= 0 &&
+            SDL_GetPathInfo(bundled_firmware, &info) && info.type == SDL_PATHTYPE_FILE) {
+            o.firmware = bundled_firmware; firmware_source = "bundled";
+        }
+        if (!o.firmware) firmware_source = "picker";
     }
     signal(SIGINT, request_stop);
     signal(SIGTERM, request_stop);
@@ -540,6 +603,8 @@ int main(int argc, char **argv) {
     m8_host_aot *aot = NULL;
     m8_host_native *native = NULL;
     m8_host_native_boot *native_boot = NULL;
+    m8_engine_paths engine = {0};
+    const char *engine_name = "reference";
     struct app_context ctx = {0};
     latency *l = NULL;
     int rendered = 0, gamepads = 0, result = 1;
@@ -573,7 +638,14 @@ int main(int argc, char **argv) {
         printf("card_exported=%s destination=%s\n", m8_card_path(card), o.export_folder);
         result = 0; goto close;
     }
-    if (o.smoke) {
+    if (!o.firmware && (o.headless || o.smoke)) {
+        snprintf(error, sizeof error, "No M8 Headless firmware%s. Download M8_V6_5_2C_HEADLESS.hex from %s, then run "
+                 "m8emu --install-firmware FILE (stores %s), or pass --firmware PATH",
+                 firmware_notice ? " (the stored copy failed its SHA-256 check)" : "", M8_FIRMWARE_PAGE,
+                 user_firmware ? user_firmware : "<no data folder>");
+        goto close;
+    }
+    if (o.smoke || o.picker_smoke) {
         SDL_SetHint(SDL_HINT_VIDEO_DRIVER, "dummy");
         SDL_SetHint(SDL_HINT_RENDER_DRIVER, "software");
         o.simulated = 1;
@@ -619,7 +691,19 @@ int main(int argc, char **argv) {
         }
         if (gamepads_initialize() < 0) { snprintf(error, sizeof error, "Gamepad initialization failed"); goto close; }
         gamepads = 1;
+        m8_firmware_view_init(user_firmware);
+        if (!o.firmware) {
+            m8_firmware_view_set_engine(engine_preview(&o));
+            if (!m8_firmware_view_setup(&ctx, firmware_notice, o.picker_smoke)) { result = 0; goto close; }
+            o.firmware = user_firmware; firmware_source = "picker";
+        }
     }
+    if (!o.firmware) { snprintf(error, sizeof error, "No M8 Headless firmware"); goto close; }
+    /* The user's copy was verified against the pin; hash others for their engine folder. */
+    if (o.firmware == user_firmware) SDL_strlcpy(firmware_sha, M8_FIRMWARE_BIN_SHA256, sizeof firmware_sha);
+    else if (m8_firmware_file_sha256(o.firmware, firmware_sha, NULL, 0)) *firmware_sha = 0;
+    printf("firmware=%s firmware_source=%s firmware_sha256=%s\n", o.firmware, firmware_source,
+           *firmware_sha ? firmware_sha : "unknown");
     if (!o.demo && !o.image) {
         card = m8_card_open(o.card, o.read_only, 1, error, sizeof error);
         if (!card) goto close;
@@ -627,8 +711,17 @@ int main(int argc, char **argv) {
             snprintf(error, sizeof error, "%s", m8_card_error(card)); goto close;
         }
     }
+    /* Generated libraries derive from the firmware: CLI/environment, the
+     * user's folder for this firmware, bundled lib/, else the reference engine. */
+    m8_engine_locate(explicit_engine(&o), *firmware_sha ? firmware_sha : NULL, &engine);
+    if (engine.source == M8_ENGINE_USER) {
+        o.aot = engine.aot; o.native_library = engine.step; o.native_regions = engine.regions;
+    } else if (engine.source == M8_ENGINE_NONE && !o.native_requested) {
+        o.aot = ""; o.native_engine = 0; o.native_boot = 0;
+    }
+    int engine_fallback = M8_NATIVE_APP_DEFAULT || engine.source == M8_ENGINE_USER;
     m8rt_options rt_options = {0, 1, 1, 0};
-    if (M8_NATIVE_APP_DEFAULT && o.native_engine &&
+    if (engine_fallback && o.native_engine &&
         m8_host_native_default_environment(error, sizeof error)) {
         m8_host_native_report_fallback(stderr, "environment", error);
         o.native_engine = 0;
@@ -636,13 +729,13 @@ int main(int argc, char **argv) {
     }
     if (o.aot_timing) SDL_setenv_unsafe("M8RT_AOT_TIMING", "1", 1);
     aot = m8_host_aot_preload(o.aot, error, sizeof error);
-    if (!aot && M8_NATIVE_APP_DEFAULT && o.native_engine) {
+    if (!aot && engine_fallback && (o.native_engine || engine.source == M8_ENGINE_USER)) {
         m8_host_native_report_fallback(stderr, "aot_load", error);
         o.native_engine = 0;
         aot = m8_host_aot_preload("", error, sizeof error);
     }
     if (!aot) goto close;
-    native = m8_host_native_preload_policy(o.native_engine, M8_NATIVE_APP_DEFAULT,
+    native = m8_host_native_preload_policy(o.native_engine, engine_fallback,
         o.native_library, o.native_regions, aot, error, sizeof error);
     if (!native) goto close;
     if (*m8_host_native_fallback(native))
@@ -657,7 +750,7 @@ int main(int argc, char **argv) {
     profile.aot = m8_host_aot_path(aot);
     int native_loaded = m8_host_native_enabled(native);
     if (o.native_boot ? m8_host_native_boot_attach(s.rt, native_boot, error, sizeof error) :
-        m8_host_native_attach_policy(s.rt, native, M8_NATIVE_APP_DEFAULT, error, sizeof error)) goto close;
+        m8_host_native_attach_policy(s.rt, native, engine_fallback, error, sizeof error)) goto close;
     if (!o.native_boot && m8_host_native_boot_attach(s.rt, native_boot, error, sizeof error)) goto close;
     if (native_loaded && !m8_host_native_enabled(native))
         m8_host_native_report_fallback(stderr, "native_admission", m8_host_native_fallback(native));
@@ -667,6 +760,20 @@ int main(int argc, char **argv) {
     if (m8_host_aot_path(aot)) printf("aot_library=%s entries=%u services=%u\n",
         m8_host_aot_path(aot), m8_host_aot_entries(aot), m8_host_aot_services(aot));
     if (m8_host_native_boot_path(native_boot)) printf("native_boot_library=%s\n",m8_host_native_boot_path(native_boot));
+    engine_name = m8_host_native_enabled(native) ? "native" : m8_host_aot_path(aot) ? "aot" : "reference";
+    printf("engine=%s engine_source=%s\n", engine_name,
+           !strcmp(engine_name, "reference") && engine.source != M8_ENGINE_EXPLICIT ? "none" : m8_engine_source_name(engine.source));
+    if (rendered) {
+        char label[41];
+        snprintf(label, sizeof label, "%s%s", !strcmp(engine_name, "native") ? "NATIVE" : !strcmp(engine_name, "aot") ? "AOT" : "REFERENCE",
+                 engine.source == M8_ENGINE_USER && strcmp(engine_name, "reference") ? " (BUILT HERE)" : "");
+        m8_firmware_view_set_engine(label);
+        snprintf(label, sizeof label, "%s %s", !strcmp(firmware_sha, M8_FIRMWARE_BIN_SHA256) ? M8_FIRMWARE_VERSION : "CUSTOM",
+                 !strcmp(firmware_source, "bundled") ? "BUNDLED" : !strcmp(firmware_source, "cli") ? "FILE" : "OK");
+        m8_firmware_view_set_firmware(label);
+    }
+    /* Only the reference engine uses its own ring default. */
+    if (!strcmp(engine_name, "reference") && !o.queue_selected) o.queue_ms = M8_REFERENCE_AUDIO_QUEUE_MS;
     if (o.demo && m8_card_empty_runtime(s.rt)) { snprintf(error, sizeof error, "Cannot format the demo card"); goto close; }
     int read_only = card ? m8_card_read_only(card) : o.read_only;
     if (m8rt_sd_set_read_only(s.rt, read_only)) {
@@ -739,6 +846,7 @@ int main(int argc, char **argv) {
         SDL_Event event;
         while (SDL_PollEvent(&event)) {
             if (event.type == SDL_EVENT_QUIT) stop_requested = 1;
+            if (rendered && !m8_gamepad_view_is_open() && m8_firmware_view_event(&ctx, &event)) continue;
             m8_handheld_event(&ctx, &event);
             if (ctx.app_state == QUIT) { stop_requested = 1; break; }
         }
@@ -780,8 +888,8 @@ int main(int argc, char **argv) {
     unsigned latency_phase = 0;
     int stalled = 0;
     last_status = s.started;
-    printf("M8 Native 6.5.2C threaded local / %s; firmware=%s card=%s\n", m8live_driver(s.audio),
-           o.firmware, card ? m8_card_path(card) : o.demo ? "temporary demo" : o.image);
+    printf("M8 Native 6.5.2C threaded local / %s; firmware=%s card=%s engine=%s queue_ms=%.0f\n", m8live_driver(s.audio),
+           o.firmware, card ? m8_card_path(card) : o.demo ? "temporary demo" : o.image, engine_name, o.queue_ms);
     fflush(stdout);
     renders_base = m8_render_present_count();
     status(&s, &state, cpu_base, main_base, -1, 0);
@@ -822,6 +930,8 @@ int main(int argc, char **argv) {
         SDL_Event event;
         while (SDL_PollEvent(&event)) {
             if (event.type == SDL_EVENT_WINDOW_FOCUS_LOST) m8_send_msg_controller(0);
+            if (rendered && !settings_is_open() && !m8_gamepad_view_is_open() &&
+                m8_firmware_view_event(&ctx, &event)) continue;
             if (m8_handheld_event(&ctx, &event)) {
                 if (ctx.app_state == QUIT) break;
                 continue;
@@ -937,6 +1047,9 @@ close:
     m8_host_native_close(native);
     m8_host_native_boot_close(native_boot);
     m8_card_close(card);
+    m8_engine_paths_free(&engine);
+    free(user_firmware);
+    SDL_free(bundled_firmware);
     free(l);
     if (gamepads) gamepads_close();
     if (rendered) { renderer_close(); inline_font_close(); }

@@ -1,19 +1,18 @@
 #include "gamepad_view.h"
 #include "handheld.h"
+#include "m8_ui.h"
 #include "common.h"
 #include "input.h"
 #include "ini.h"
 #include "render.h"
-#include "SDL2_inprint.h"
-#include "fonts/fonts.h"
 #include <stddef.h>
 #include <stdio.h>
 #include <string.h>
 
 /* M8 default theme. Text sits on the firmware's 8x10 cell grid. */
-enum { BACKGROUND = 0x000000, EMPTY = 0x202830, INFO = 0x485060, TEXT = 0x90b8b8,
-       VALUE = 0xf8fcf8, TITLE = 0xf82040, SELECTED = 0x00fcf8, CURSOR = 0x00dcd8, PLAY = 0x00fc60 };
-enum { COLUMNS = 40, CELL_W = 8, CELL_H = 10, TOP = 30, MESSAGE_ROW = 18, HINT_ROW = 22 };
+enum { BACKGROUND = M8_UI_BACKGROUND, EMPTY = M8_UI_EMPTY, INFO = M8_UI_INFO, TEXT = M8_UI_TEXT,
+       VALUE = M8_UI_VALUE, TITLE = M8_UI_TITLE, SELECTED = M8_UI_SELECTED, PLAY = M8_UI_PLAY };
+enum { COLUMNS = M8_UI_COLUMNS, CELL_W = M8_UI_CELL_W, CELL_H = M8_UI_CELL_H, TOP = 30, MESSAGE_ROW = 18, HINT_ROW = 22 };
 enum { PAGE_PADS, PAGE_MAP, PAGE_SETUP, PAGE_COUNT };
 enum { CONTROLS = 8, MAP_LEARN = CONTROLS, MAP_DEFAULTS, MAP_ROWS };
 enum { SET_STICK, SET_LTRIGGER, SET_RTRIGGER, SET_THRESHOLD, SET_EXIT, SET_BACKGROUND, SET_DEFAULTS, SET_ROWS };
@@ -32,7 +31,6 @@ static const struct { const char *name; size_t button, axis; int key; } controls
 
 static struct {
     struct app_context *ctx;
-    SDL_Renderer *renderer;
     SDL_Texture *texture;
     bool open, conf_dirty, learn, edit, shift, option, option_used;
     int page, row[PAGE_COUNT], capture;
@@ -444,38 +442,15 @@ void m8_gamepad_view_close(struct app_context *ctx) {
 
 /* ---- drawing ---- */
 
-static int text_y;
-static void text(int col, int row, const char *s, Uint32 color) {
-    char glyph[2] = {0};
-    incolor(color);
-    for (; *s && col < COLUMNS; ++s, ++col) {
-        /* The font covers printable ASCII; m8c prints letters in capitals. */
-        glyph[0] = *s >= 'a' && *s <= 'z' ? (char)(*s - 32) : *s > ' ' && *s < 127 ? *s : ' ';
-        if (glyph[0] != ' ') inprint(view.renderer, glyph, (Uint32)(col * CELL_W), (Uint32)(row * CELL_H + text_y), color, color);
-    }
-}
-static void fill(int x, int y, int w, int h, Uint32 color) {
-    SDL_FRect r = {(float)x, (float)y, (float)w, (float)h};
-    SDL_SetRenderDrawColor(view.renderer, (Uint8)(color >> 16), (Uint8)(color >> 8), (Uint8)color, 0xff);
-    SDL_RenderFillRect(view.renderer, &r);
-}
-/* The firmware cursor: four stepped corners around a field of width cells. */
-static void cursor(int col, int row, int width) {
-    int x0 = col * CELL_W - 4, x1 = (col + (width < 1 ? 1 : width)) * CELL_W, y0 = row * CELL_H, y1 = y0 + 12;
-    for (int i = 0; i < 3; ++i) {
-        fill(x0, y0 + i, 3 - i, 1, CURSOR); fill(x1 - 2 + i, y0 + i, 3 - i, 1, CURSOR);
-        fill(x0, y1 - i, 3 - i, 1, CURSOR); fill(x1 - 2 + i, y1 - i, 3 - i, 1, CURSOR);
-    }
+static void text(int col, int row, const char *s, Uint32 color) { m8_ui_text(col, row, s, color); }
+static void fill(int x, int y, int w, int h, Uint32 color) { m8_ui_fill(x, y, w, h, color); }
+static void field(int col, int row, const char *value, bool selected, Uint32 color) {
+    m8_ui_field(col, row, value, selected, color);
 }
 /* The firmware play marker, a 3x5 triangle, flags live input on a row. */
 static void marker(int row) {
     for (int i = 0; i < 3; ++i) fill(1 + i, row * CELL_H + 4 + i, 1, 5 - 2 * i, PLAY);
 }
-static void field(int col, int row, const char *value, bool selected, Uint32 color) {
-    text(col, row, value, selected ? SELECTED : color);
-    if (selected) cursor(col, row, (int)strlen(value));
-}
-
 static bool accepted(SDL_Gamepad *pad) {
     SDL_Gamepad *active = m8_handheld_active();
     return pad && (!active || active == pad);
@@ -607,7 +582,7 @@ static void draw_setup(SDL_Gamepad *label) {
     /* A 128 px meter: live deflection of the bound axes against the threshold. */
     int level = 0;
     for (int i = 0; i < CONTROLS; ++i) { int v = axis_level(FIELD(c, controls[i].axis)); if (v > level) level = v; }
-    int x = 17 * CELL_W, y = r * CELL_H + text_y + 1, width = 16 * CELL_W;
+    int x = 17 * CELL_W, y = r * CELL_H + m8_ui_text_y() + 1, width = 16 * CELL_W;
     fill(x, y, width, 5, EMPTY);
     fill(x, y, level * width / 32768, 5, level > threshold ? PLAY : INFO);
     fill(x + clamp(threshold * width / 32768, 0, width - 1), y - 1, 1, 7, VALUE);
@@ -636,28 +611,10 @@ static const char *hint(SDL_Gamepad *label, char *line, int capacity) {
 void m8_overlay_render(SDL_Renderer *renderer, int width, int height, SDL_ScaleMode mode, int font_mode) {
     (void)mode; (void)font_mode;
     if (!view.open || !view.ctx) return;
-    float tw = 0, th = 0;
-    if (view.texture && (!SDL_GetTextureSize(view.texture, &tw, &th) || (int)tw != width || (int)th != height)) {
-        SDL_DestroyTexture(view.texture); view.texture = NULL;
-    }
-    if (!view.texture) {
-        view.texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_TARGET, width, height);
-        if (!view.texture) return;
-        SDL_SetTextureBlendMode(view.texture, SDL_BLENDMODE_BLEND);
-        SDL_SetTextureScaleMode(view.texture, SDL_SCALEMODE_NEAREST);
-    }
-    view.renderer = renderer;
-    SDL_Texture *target = SDL_GetRenderTarget(renderer);
-    SDL_SetRenderTarget(renderer, view.texture);
-    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
-    SDL_RenderClear(renderer);
+    if (!m8_ui_begin(renderer, &view.texture, width, height)) return;
     /* Keep the firmware's scope rows and level meters live above the page. */
     fill(0, TOP + CELL_H, width, height - TOP - CELL_H, BACKGROUND);
     fill(0, TOP, 34 * CELL_W, CELL_H, BACKGROUND);
-    const struct inline_font *previous = inline_font_get_current(), *small = fonts_get(0);
-    if (!previous) { SDL_SetRenderTarget(renderer, target); return; }
-    if (previous != small) { inline_font_close(); inline_font_initialize(small); }
-    text_y = small->text_offset_y;
 
     SDL_Gamepad *label = m8_handheld_label_pad();
     char line[COLUMNS + 1];
@@ -674,10 +631,6 @@ void m8_overlay_render(SDL_Renderer *renderer, int width, int height, SDL_ScaleM
     /* The firmware's screen map: one row of pages, the current one lit. */
     for (int i = 0; i < PAGE_COUNT; ++i) text(35 + i, 20, (const char *[]){"G", "M", "S"}[i], i == view.page ? SELECTED : INFO);
 
-    if (previous != small) { inline_font_close(); inline_font_initialize(previous); }
-    /* inprint caches the last color; resync it with the font texture. */
-    inprint(renderer, " ", 0, 0, 0x010101, 0x010101);
-    SDL_SetRenderTarget(renderer, target);
-    SDL_RenderTexture(renderer, view.texture, NULL, NULL);
+    m8_ui_end();
     renderer_request_redraw();
 }

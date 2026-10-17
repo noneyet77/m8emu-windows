@@ -70,7 +70,7 @@ m8_host_native_boot *m8_host_native_boot_preload(int enabled,const char *selecte
     if(abi_value!=1u) {fail(error,capacity,"Native boot library predicate=abi value=%u expected=1: path=%s",abi_value,boot->path);goto failed;}
     if(!firmware) {fail(error,capacity,"Native boot library predicate=firmware_export value=0: path=%s",boot->path);goto failed;}
     const char *firmware_value=firmware();
-    if(!firmware_value || strcmp(firmware_value,"20498b7637cee17baae249372db3b8377afd4e12a5e7062754c2ddd83621367f")) {
+    if(!firmware_value || strcmp(firmware_value,M8_FIRMWARE_BIN_SHA256)) {
         fail(error,capacity,"Native boot library predicate=firmware value=%.64s: path=%s",firmware_value?firmware_value:"<null>",boot->path);goto failed;
     }
     boot->config.cold_step=(m8rt_native_step_fn)SDL_LoadFunction(boot->library,"m8_native_step");

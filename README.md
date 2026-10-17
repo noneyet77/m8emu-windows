@@ -10,7 +10,17 @@ This fork of [karimkfoure/m8emu](https://github.com/karimkfoure/m8emu) adds a na
 
 ## Install
 
-A prebuilt app that ships without Dirtywave's firmware is on the way. For now, build from source as described below. Either way you need the official firmware file from Dirtywave's repository: [M8_V6_5_2C_HEADLESS.hex](https://github.com/Dirtywave/M8HeadlessFirmware/blob/main/Releases/M8_V6_5_2C_HEADLESS.hex). This project doesn't redistribute it.
+1. Download `m8emu.app` from the [latest release](https://github.com/yukij3/m8emu-macos/releases/latest), unzip it and move it to Applications. It needs an Apple Silicon Mac with macOS 13 or later.
+2. The app is self-signed and not notarized, so clear the quarantine flag once before opening it:
+   ```sh
+   xattr -dr com.apple.quarantine /Applications/m8emu.app
+   ```
+3. Download [M8_V6_5_2C_HEADLESS.hex](https://github.com/Dirtywave/M8HeadlessFirmware/blob/main/Releases/M8_V6_5_2C_HEADLESS.hex) from Dirtywave's repository. The app doesn't include it.
+4. Open m8emu and pick the file, or drop it on the window. The app checks it and keeps a copy in `~/Library/Application Support/m8-live/firmware/`, so later launches go straight to the M8.
+
+<img src="assets/screenshots/firmware.png" width="480" alt="The firmware screen on first launch">
+
+Out of the box the firmware runs on the Unicorn reference engine, about three times faster than real time, with a 20 ms audio buffer. For the native engine, press F4 to open the firmware screen and choose BUILD NATIVE ENGINE. It needs the Xcode Command Line Tools (the app offers to install them) and takes about five minutes. The engine is generated from your own firmware on your Mac and saved in `~/Library/Application Support/m8-live/engine/`. After a restart it loads automatically, runs about ten times faster than real time and uses a 12 ms buffer. Without a window, run `m8emu --build-engine`.
 
 ## Build from source on macOS
 
@@ -25,7 +35,7 @@ cmake --preset macos && cmake --build --preset macos
 
 The `macos` preset uses profile-guided optimization and takes about 10 minutes. For a faster build without it, use `cmake --preset macos-dev && cmake --build --preset macos-dev`. The build downloads and compiles a pinned SDL3 itself.
 
-You get `build/macos/m8emu` with `lib/` and `firmware/` next to it, plus a self-contained `build/macos/m8emu.app` (arm64, macOS 13 or later). The app is signed ad hoc. To sign it with your own certificate, configure with `-DM8_CODESIGN_IDENTITY="<keychain identity>"`.
+You get `build/macos/m8emu` with `lib/` and `firmware/` next to it, plus `build/macos/m8emu.app` (arm64, macOS 13 or later). Like the release, the app contains neither the firmware nor the generated engine. Configure with `-DM8_MACOS_APP_FIRMWARE_FREE=OFF` for a self-contained app for your own use. The app is signed ad hoc. To sign it with your own certificate, configure with `-DM8_CODESIGN_IDENTITY="<keychain identity>"`.
 
 To check that it works without opening a window:
 
@@ -55,6 +65,7 @@ Linux works as upstream: `cmake --preset linux` (GCC, with PGO) or `cmake --pres
 | Mute host audio | F12 |
 | Redraw display | R |
 | Gamepad view | F3 or Cmd+G |
+| Firmware and engine screen | F4 |
 
 USB and Bluetooth gamepads work through SDL3 and GameController.framework: DualSense, DualShock 4, Xbox, Switch Pro, 8BitDo and others. You can connect a pad while the emulator runs, and if it disconnects, any buttons it was holding are released. By default the D-pad moves, the face buttons map by position (west SHIFT, north PLAY, east OPTION, south EDIT) and Back+Start exits.
 

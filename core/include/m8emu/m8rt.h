@@ -8,6 +8,8 @@ typedef struct m8rt m8rt;
 #include "native-engine.h"
 #endif
 typedef struct m8rt_options {
+    /* strict: 0 tolerant, 1 every stray access is fatal, 2 stray data
+     * accesses are absorbed (interactive use) but stray code fetches fatal. */
     uint32_t reference_policy, strict, host_handshake, profile_blocks;
 } m8rt_options;
 enum m8rt_field {

@@ -60,6 +60,10 @@ cmake --preset windows-cross && cmake --build --preset windows-cross
   window asks first, then saves the card and restarts the M8 with the
   import (save your song first). Identical files already on the card are
   skipped; a different file with the same name is refused.
+- If the M8 crashes, the main card and `M8 Card` folder are left as they
+  were, and anything the session wrote (songs you saved) is copied to
+  `M8 Card (rescued DATE)`. A stray memory read by the firmware no longer
+  ends the session; it is logged as `guest_warning` in `m8emu.log`.
 - Keys: arrows, Space = PLAY, X = EDIT, Z = OPTION, Shift = SHIFT
   (Ctrl and Alt also work as EDIT and OPTION). F4 opens the firmware screen.
   Keys live in `%APPDATA%\m8c\config.ini`.

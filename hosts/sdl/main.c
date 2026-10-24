@@ -898,6 +898,8 @@ int main(int argc, char **argv) {
     }
     int engine_fallback = M8_NATIVE_APP_DEFAULT || engine.source == M8_ENGINE_USER;
     m8rt_options rt_options = {0, 1, 1, 0};
+    /* A live music session should survive a stray guest read; tests stay strict. */
+    if (rendered && !o.headless && !o.demo && !o.smoke && !o.latency && !o.project && !o.pcm) rt_options.strict = 2;
     if (engine_fallback && o.native_engine &&
         m8_host_native_default_environment(error, sizeof error)) {
         m8_host_native_report_fallback(stderr, "environment", error);
@@ -1169,7 +1171,20 @@ int main(int argc, char **argv) {
     }
     double main_end = m8_thread_seconds();
     m8_worker_stop(worker); m8_worker_join(worker); m8_worker_snapshot(worker, &state);
-    if (state.failed) { snprintf(error, sizeof error, "%s", state.error); goto close; }
+    if (state.failed) {
+        snprintf(error, sizeof error, "%s", state.error);
+#ifdef _WIN32
+        /* The main card is left as it was; keep this session's work aside. */
+        char rescued[2048];
+        if (card_folder && card && m8_card_folder_rescue(card, s.rt, card_folder, rescued, sizeof rescued)) {
+            char crash[512];
+            snprintf(crash, sizeof crash, "%s", error);
+            snprintf(error, sizeof error, "The M8 crashed (%.200s). Your card was left as it was; this session's "
+                     "card, with anything you saved, is in: %s", crash, rescued);
+        }
+#endif
+        goto close;
+    }
     status(&s, &state, cpu_base, main_base, main_end, renders);
     if (record && record_stats(record, NULL, &s, &state, &record_ns, &record_frames, &record_cpu, &title)) {
         snprintf(error, sizeof error, "Recording log write failed: error=%d", errno); goto close;

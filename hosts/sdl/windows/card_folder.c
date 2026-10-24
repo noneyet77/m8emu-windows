@@ -779,3 +779,27 @@ void m8_card_folder_finish(m8_card *card, m8rt *rt, const char *folder)
     save_state(path, folder, fingerprint(folder), 0);
     printf("card_folder_updated=%s\n", folder);
 }
+
+int m8_card_folder_rescue(m8_card *card, m8rt *rt, const char *folder, char *where, size_t capacity)
+{
+    (void)card;
+    if (!folder_active || !rt) return 0;
+    int all = 1, changed;
+    const uint8_t *dirty = m8rt_sd_dirty_pages(rt, &all);
+    changed = all || !dirty;
+    for (size_t i = 0, n = (m8rt_sd_image_size(rt) / M8RT_SD_PAGE + 7) / 8; !changed && i < n; ++i) changed = dirty[i] != 0;
+    if (!changed) return 0;                /* nothing written this session: nothing lost */
+    char error[512], copy[2048];
+    runtime_ctx rc = {rt};
+    m8fat_source source = {&rc, runtime_read, m8rt_sd_image_size(rt)};
+    m8fat_volume *v = m8fat_open(&source, error, sizeof error);
+    SYSTEMTIME t;
+    GetLocalTime(&t);
+    snprintf(copy, sizeof copy, "%s (rescued %04u-%02u-%02u %02u%02u)", folder, t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute);
+    int r = v ? sync_volume(v, copy, NULL, error, sizeof error) : -1;
+    m8fat_close(v);
+    if (r) { printf("card_rescue_failed=%s\n", v ? error : "card unreadable"); return 0; }
+    printf("card_rescued=%s\n", copy);
+    snprintf(where, capacity, "%s", copy);
+    return 1;
+}

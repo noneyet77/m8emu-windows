@@ -547,7 +547,13 @@ static bool unmapped_hook(uc_engine *uc,uc_mem_type type,uint64_t addr,int size,
                            type==UC_MEM_FETCH_UNMAPPED?M8RT_AUDIT_FETCH:M8RT_AUDIT_READ;
         m8rt_audit_access(rt,M8RT_AUDIT_UNMAPPED,addr,(unsigned)size,direction,(unsigned)type,(uint64_t)value);
     }
-    if(rt->options.strict) { m8rt_fail(rt,"unmapped access=%u address=%llx pc=%08x",type,(unsigned long long)addr,m8rt_reg_read(rt,UC_ARM_REG_PC)); return false; }
+    /* strict 2 (interactive sessions): a stray data access gets an empty page
+     * and a warning instead of ending the session; executing from unmapped
+     * memory is still fatal. */
+    int tolerate=rt->options.strict==2 && type!=UC_MEM_FETCH_UNMAPPED;
+    if(rt->options.strict && !tolerate) { m8rt_fail(rt,"unmapped access=%u address=%llx pc=%08x",type,(unsigned long long)addr,m8rt_reg_read(rt,UC_ARM_REG_PC)); return false; }
+    if(tolerate) fprintf(stderr,"guest_warning=unmapped %s address=%llx size=%d pc=%08x; mapped an empty page and continued\n",
+        type==UC_MEM_WRITE_UNMAPPED?"write":"read",(unsigned long long)addr,size,m8rt_reg_read(rt,UC_ARM_REG_PC));
     if(rt->direct_memory) {
         fprintf(stderr,"m8rt: direct memory disabled by non-strict unmapped access: type=%u address=%llx size=%d pc=%08x; native admission unavailable\n",
             type,(unsigned long long)addr,size,m8rt_reg_read(rt,UC_ARM_REG_PC));

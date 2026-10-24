@@ -152,9 +152,11 @@ if(WIN32)
   enable_language(RC)
   target_sources(m8emu PRIVATE ${CMAKE_CURRENT_LIST_DIR}/windows/m8emu.rc ${CMAKE_CURRENT_LIST_DIR}/windows/win_launch.c
     ${CMAKE_CURRENT_LIST_DIR}/windows/card_folder.c
+    ${CMAKE_CURRENT_LIST_DIR}/windows/midi_win.c
     ${STORAGE}/fat32.c)
   target_include_directories(m8emu PRIVATE ${CMAKE_CURRENT_LIST_DIR}/windows)
   set_target_properties(m8emu PROPERTIES WIN32_EXECUTABLE TRUE)
+  target_link_libraries(m8emu PRIVATE winmm)
   set_source_files_properties(${CMAKE_CURRENT_LIST_DIR}/windows/m8emu.rc PROPERTIES
     OBJECT_DEPENDS ${CMAKE_CURRENT_LIST_DIR}/windows/m8emu.manifest)
   target_compile_options(m8emu PRIVATE $<$<COMPILE_LANGUAGE:C>:-include$<SEMICOLON>${PLATFORM}/win_compat.h>)

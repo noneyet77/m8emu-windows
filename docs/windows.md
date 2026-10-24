@@ -64,6 +64,14 @@ cmake --preset windows-cross && cmake --build --preset windows-cross
   were, and anything the session wrote (songs you saved) is copied to
   `M8 Card (rescued DATE)`. A stray memory read by the firmware no longer
   ends the session; it is logged as `guest_warning` in `m8emu.log`.
+- External MIDI: every USB MIDI keyboard, controller or interface is
+  connected to the M8's MIDI input (notes, CCs, clock and transport;
+  SysEx is not routed), and what the M8 sends goes to every MIDI output
+  except Windows' built-in GS synth. Devices can be plugged in while the
+  emulator runs (picked up within two seconds). `--midi-in NAME` /
+  `--midi-out NAME` pick devices by name, `none` turns a direction off,
+  `--no-midi` turns it all off. The log lists the devices opened. A device
+  another program (a DAW) has open cannot be shared; close it there first.
 - Keys: arrows, Space = PLAY, X = EDIT, Z = OPTION, Shift = SHIFT
   (Ctrl and Alt also work as EDIT and OPTION). F4 opens the firmware screen.
   Keys live in `%APPDATA%\m8c\config.ini`.

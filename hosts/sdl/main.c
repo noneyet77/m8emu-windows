@@ -19,6 +19,7 @@
 #ifdef _WIN32
 #include "win_launch.h"
 #include "card_folder.h"
+#include "midi_win.h"
 #endif
 #include "user_paths.h"
 #include "settings.h"
@@ -68,6 +69,7 @@ typedef struct options {
     unsigned drop_count;
     const char *card_folder;
     int no_card_folder;
+    const char *midi_in, *midi_out;
     unsigned profile_hz;
     int host_pmu;
     const char *pmu_sample, *profile_output;
@@ -154,6 +156,9 @@ static void usage(void) {
          "  --overwrite            Permit imported files to replace card files\n"
          "  --card-folder DIR      Windows: mirror the card in DIR (default Documents\\M8 Card)\n"
          "  --no-card-folder       Windows: no folder mirror (128 MiB FAT16 card)\n"
+         "  --midi-in NAME         Windows: MIDI inputs to use (name contains NAME; none = off)\n"
+         "  --midi-out NAME        Windows: MIDI outputs to use (default all but the GS synth)\n"
+         "  --no-midi              Windows: no external MIDI\n"
          "  FOLDER ...             Import folders: into /Samples/<name>, or the card\n"
          "                         root when the folder holds Samples, Songs, etc.\n"
          "  --export DIRECTORY     Export the card without booting, to a new/empty folder\n"
@@ -212,6 +217,7 @@ static int parse(int argc, char **argv, options *o) {
         else if (!strcmp(a, "--no-play")) o->no_play = 1;
         else if (!strcmp(a, "--overwrite")) o->overwrite = 1;
         else if (!strcmp(a, "--no-card-folder")) o->no_card_folder = 1;
+        else if (!strcmp(a, "--no-midi")) o->midi_in = o->midi_out = "none";
         else if (!strcmp(a, "--no-aot")) o->aot = "";
         else if (!strcmp(a, "--aot-timing")) o->aot_timing = 1;
         else if (!strcmp(a, "--native-engine")) o->native_engine = 1;
@@ -281,6 +287,8 @@ static int parse(int argc, char **argv, options *o) {
             else if (!strcmp(a, "--image")) { o->image = v; ++media; }
             else if (!strcmp(a, "--config")) o->config = v;
             else if (!strcmp(a, "--card-folder")) o->card_folder = v;
+            else if (!strcmp(a, "--midi-in")) o->midi_in = v;
+            else if (!strcmp(a, "--midi-out")) o->midi_out = v;
 
             else if (!strcmp(a, "--import")) o->import_folder = v;
             else if (!strcmp(a, "--export") || !strcmp(a, "export")) o->export_folder = v;
@@ -998,8 +1006,17 @@ int main(int argc, char **argv) {
         .measurement_context = &profile,
         .control = latency_control, .control_context = l
     };
+#ifdef _WIN32
+    /* External MIDI devices, for ordinary windowed sessions. */
+    int external_midi = rendered && !o.headless && !o.demo && !o.smoke && !o.latency && !o.project && !o.pcm &&
+                        !(o.midi_in && !_stricmp(o.midi_in, "none") && o.midi_out && !_stricmp(o.midi_out, "none"));
+    if (external_midi && m8rt_set_midi(s.rt, 1)) external_midi = 0;
+#endif
     worker = m8_worker_start(&s, &wo);
     if (!worker) { snprintf(error, sizeof error, "Cannot start guest thread: %s", SDL_GetError()); goto close; }
+#ifdef _WIN32
+    if (external_midi) { m8_worker_enable_midi(worker); m8_midi_start(worker, o.midi_in, o.midi_out); }
+#endif
     m8_bridge_transport(m8_worker_send, worker);
     if (o.session_script) {
         while (!stop_requested) {
@@ -1118,6 +1135,9 @@ int main(int argc, char **argv) {
             if (m8_worker_control(worker, 3, 0) < 0) goto close;
             latency_phase = 3;
         }
+#ifdef _WIN32
+        m8_midi_poll();
+#endif
         SDL_Event event;
         while (SDL_PollEvent(&event)) {
             if (event.type == SDL_EVENT_WINDOW_FOCUS_LOST) m8_send_msg_controller(0);
@@ -1170,6 +1190,9 @@ int main(int argc, char **argv) {
         SDL_DelayNS((uint64_t)o.poll_ms*1000000);
     }
     double main_end = m8_thread_seconds();
+#ifdef _WIN32
+    m8_midi_stop();
+#endif
     m8_worker_stop(worker); m8_worker_join(worker); m8_worker_snapshot(worker, &state);
     if (state.failed) {
         snprintf(error, sizeof error, "%s", state.error);
@@ -1248,6 +1271,9 @@ int main(int argc, char **argv) {
     else result = 0;
 close:
     m8_engine_view_shutdown();
+#ifdef _WIN32
+    m8_midi_stop();
+#endif
     m8_worker_stop(worker); m8_worker_join(worker);
     if (profile.output && fclose(profile.output)) {
         snprintf(error, sizeof error, "Guest profile close failed: error=%d", errno);

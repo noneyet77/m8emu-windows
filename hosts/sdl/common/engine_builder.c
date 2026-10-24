@@ -5,16 +5,20 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
-#include <spawn.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#ifdef __APPLE__
+#include <spawn.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#endif
 
 static struct {
+#ifdef __APPLE__
     pid_t pid;
+#endif
     m8_engine_state state;
     int percent;
     char text[96], sha[65], dir[4096], log[4096];

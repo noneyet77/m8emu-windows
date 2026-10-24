@@ -16,6 +16,10 @@
 #include "engine_view.h"
 #include "firmware.h"
 #include "firmware_view.h"
+#ifdef _WIN32
+#include "win_launch.h"
+#include "card_folder.h"
+#endif
 #include "user_paths.h"
 #include "settings.h"
 #include "metrics.h"
@@ -58,6 +62,12 @@ typedef struct options {
     int video_probe, host_info, vsync, title_stats, build_engine;
     unsigned window_scale;
     const char *record_log;
+    /* Folders given without an option (dropped on the program in Explorer). */
+    const char *drops[16];
+    int drop_index[16];
+    unsigned drop_count;
+    const char *card_folder;
+    int no_card_folder;
     unsigned profile_hz;
     int host_pmu;
     const char *pmu_sample, *profile_output;
@@ -142,6 +152,10 @@ static void usage(void) {
          "  --read-only            Reject guest writes; do not save the card\n"
          "  --import DIRECTORY     Merge into private card storage before boot\n"
          "  --overwrite            Permit imported files to replace card files\n"
+         "  --card-folder DIR      Windows: mirror the card in DIR (default Documents\\M8 Card)\n"
+         "  --no-card-folder       Windows: no folder mirror (128 MiB FAT16 card)\n"
+         "  FOLDER ...             Import folders: into /Samples/<name>, or the card\n"
+         "                         root when the folder holds Samples, Songs, etc.\n"
          "  --export DIRECTORY     Export the card without booting, to a new/empty folder\n"
          "  --queue-ms N           Ring capacity, 5..1000 ms (default: " M8_STRING_VALUE(M8_NATIVE_AUDIO_QUEUE_MS)
          ", reference engine " M8_STRING_VALUE(M8_REFERENCE_AUDIO_QUEUE_MS) ")\n"
@@ -197,6 +211,7 @@ static int parse(int argc, char **argv, options *o) {
         else if (!strcmp(a, "--play")) o->play = 1;
         else if (!strcmp(a, "--no-play")) o->no_play = 1;
         else if (!strcmp(a, "--overwrite")) o->overwrite = 1;
+        else if (!strcmp(a, "--no-card-folder")) o->no_card_folder = 1;
         else if (!strcmp(a, "--no-aot")) o->aot = "";
         else if (!strcmp(a, "--aot-timing")) o->aot_timing = 1;
         else if (!strcmp(a, "--native-engine")) o->native_engine = 1;
@@ -205,6 +220,14 @@ static int parse(int argc, char **argv, options *o) {
         else if (!strcmp(a, "--no-native-boot")) o->native_boot = 0;
         else if (!strcmp(a, "--host-pmu")) o->host_pmu = 1;
         else if (!strcmp(a, "--build-engine")) o->build_engine = 1;
+        else if (a[0] != '-' && strcmp(a, "export")) {
+            if (o->drop_count == sizeof o->drops / sizeof *o->drops) {
+                fprintf(stderr, "Too many folders (at most %u)\n", (unsigned)(sizeof o->drops / sizeof *o->drops));
+                return -1;
+            }
+            o->drop_index[o->drop_count] = i;
+            o->drops[o->drop_count++] = a;
+        }
         else {
             if (++i >= argc) { fprintf(stderr, "Missing value for %s\n", a); return -1; }
             const char *v = argv[i];
@@ -257,6 +280,8 @@ static int parse(int argc, char **argv, options *o) {
             else if (!strcmp(a, "--card")) { o->card = v; ++media; }
             else if (!strcmp(a, "--image")) { o->image = v; ++media; }
             else if (!strcmp(a, "--config")) o->config = v;
+            else if (!strcmp(a, "--card-folder")) o->card_folder = v;
+
             else if (!strcmp(a, "--import")) o->import_folder = v;
             else if (!strcmp(a, "--export") || !strcmp(a, "export")) o->export_folder = v;
             else if (!strcmp(a, "--demo")) {
@@ -335,6 +360,7 @@ static int parse(int argc, char **argv, options *o) {
         (o->latency && (!o->demo || o->no_play || o->play)) ||
         (o->overwrite && !o->import_folder) ||
         (o->import_folder && (o->read_only || o->demo || o->image)) ||
+        (o->drop_count && (o->read_only || o->demo || o->image || o->export_folder)) ||
         (o->export_folder && (o->demo || o->image || o->import_folder)) ||
         (o->project && (o->demo || o->export_folder)) ||
         (o->expect_silence && (!o->project || o->no_play)) ||
@@ -550,7 +576,124 @@ static int record_stats(FILE *file, SDL_Window *window, m8_session *s,
     *last_ns = now; *last_frames = p->frames; *last_cpu = cpu;
     return failed ? -1 : 0;
 }
+/* Where a folder given without an option goes on the card: the root when it
+ * already holds card folders (Samples, Songs, ...), else /Samples/<name>. */
+static const char *const card_root_names[] = {"Bundles", "Chains", "Grooves", "Instruments", "Phrases",
+    "Renders", "Samples", "Scales", "Songs", "Tables", "Themes"};
+static SDL_EnumerationResult SDLCALL find_card_root(void *found, const char *directory, const char *name) {
+    (void)directory;
+    for (size_t i = 0; i < sizeof card_root_names / sizeof *card_root_names; ++i)
+        if (!SDL_strcasecmp(name, card_root_names[i])) { *(int *)found = 1; return SDL_ENUM_SUCCESS; }
+    return SDL_ENUM_CONTINUE;
+}
+static int drop_destination(const char *folder, char *out, size_t capacity) {
+    SDL_PathInfo info;
+    if (!SDL_GetPathInfo(folder, &info) || info.type != SDL_PATHTYPE_DIRECTORY) return -1;
+    int root = 0;
+    SDL_EnumerateDirectory(folder, find_card_root, &root);
+    if (root) { out[0] = 0; return 0; }
+    size_t end = strlen(folder);
+    while (end && (folder[end - 1] == '/' || folder[end - 1] == '\\')) --end;
+    size_t start = end;
+    while (start && folder[start - 1] != '/' && folder[start - 1] != '\\' && folder[start - 1] != ':') --start;
+    if (start == end) snprintf(out, capacity, "Samples/Imported");
+    else snprintf(out, capacity, "Samples/%.*s", (int)(end - start), folder + start);
+    return 0;
+}
+#ifdef _WIN32
+/* Folders dropped on the running window: the M8 cannot take card changes
+ * while it runs, so confirm, close normally (saving the card), and restart
+ * with the folders imported. */
+static struct { char *paths[16]; unsigned count, files; int active; } dropped;
+static int window_drop_confirmed;
+static void dropped_clear(void) {
+    for (unsigned i = 0; i < dropped.count; ++i) SDL_free(dropped.paths[i]);
+    dropped.count = dropped.files = 0; dropped.active = 0;
+}
+static void window_drop_finish(int argc, char **argv, const options *o) {
+    char text[4096];
+    size_t used = 0;
+    if (!dropped.count) {
+        if (dropped.files)
+            SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_INFORMATION, "Add to card",
+                "Drop folders, not single files.\n\nPut the samples in a folder (for example \"Kicks\") "
+                "and drop that folder; it goes into /Samples/Kicks.", NULL);
+        dropped_clear(); return;
+    }
+    used += (size_t)snprintf(text + used, sizeof text - used, "Add to the card:\n\n");
+    for (unsigned i = 0; i < dropped.count && used < sizeof text - 200; ++i) {
+        char destination[300];
+        if (drop_destination(dropped.paths[i], destination, sizeof destination)) continue;
+        const char *name = dropped.paths[i] + strlen(dropped.paths[i]);
+        while (name > dropped.paths[i] && name[-1] != '\\' && name[-1] != '/') --name;
+        used += (size_t)snprintf(text + used, sizeof text - used, "  %s  ->  /%s\n", *name ? name : dropped.paths[i],
+                                 destination);
+    }
+    snprintf(text + used, sizeof text - used, "%s\nThe M8 restarts to do this, like a power cycle. "
+             "Save your song first: unsaved changes are lost.",
+             dropped.files ? "\n(Single files dropped alongside are ignored; drop folders.)\n" : "");
+    const SDL_MessageBoxButtonData buttons[] = {
+        {SDL_MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT, 1, "Import and restart"},
+        {SDL_MESSAGEBOX_BUTTON_ESCAPEKEY_DEFAULT, 0, "Cancel"},
+    };
+    /* Parented to the M8 window so it stays on top of it. */
+    int windows = 0;
+    SDL_Window **list = SDL_GetWindows(&windows);
+    SDL_Window *parent = list && windows ? list[0] : NULL;
+    SDL_free(list);
+    const SDL_MessageBoxData box = {SDL_MESSAGEBOX_INFORMATION, parent, "Add to card", text, 2, buttons, NULL};
+    int choice = 0;
+    if (SDL_ShowMessageBox(&box, &choice) && choice == 1) {
+        /* Same options as this run, minus earlier imports, plus the folders. */
+        char *args[64 + 16];
+        int n = 0;
+        args[n++] = argv[0];
+        for (int i = 1; i < argc && n < 64; ++i) {
+            int skip = !strcmp(argv[i], "--overwrite");
+            if (!strcmp(argv[i], "--import")) { ++i; continue; }
+            for (unsigned d = 0; d < o->drop_count; ++d) if (o->drop_index[d] == i) skip = 1;
+            if (!skip) args[n++] = argv[i];
+        }
+        for (unsigned i = 0; i < dropped.count; ++i) args[n++] = dropped.paths[i];
+        m8_win_request_relaunch(n, args);
+        window_drop_confirmed = 1;
+    }
+    dropped_clear();
+}
+static int window_drop(const SDL_Event *event, int argc, char **argv, const options *o) {
+    switch (event->type) {
+    case SDL_EVENT_DROP_BEGIN: dropped_clear(); dropped.active = 1; return 1;
+    case SDL_EVENT_DROP_FILE: {
+        SDL_PathInfo info;
+        const char *path = event->drop.data;
+        int folder = path && SDL_GetPathInfo(path, &info) && info.type == SDL_PATHTYPE_DIRECTORY;
+        /* Files dropped on the firmware screen are firmware for it to install. */
+        if (!folder && m8_firmware_view_is_open()) return 0;
+        if (folder && dropped.count < sizeof dropped.paths / sizeof *dropped.paths)
+            dropped.paths[dropped.count++] = SDL_strdup(path);
+        else dropped.files++;
+        if (!dropped.active) window_drop_finish(argc, argv, o);
+        return 1;
+    }
+    case SDL_EVENT_DROP_COMPLETE: window_drop_finish(argc, argv, o); return 1;
+    case SDL_EVENT_DROP_TEXT: return 1;
+    case SDL_EVENT_DROP_POSITION: return !m8_firmware_view_is_open();
+    default: return 0;
+    }
+}
+#endif
+#ifdef _WIN32
+#include "win_launch.h"
+static int m8_main(int argc, char **argv);
+int main(int argc, char **argv) { return m8_win_launch(m8_main, argc, argv); }
+static int m8_main(int argc, char **argv) {
+#else
 int main(int argc, char **argv) {
+#endif
+#ifdef _WIN32
+    /* Card, firmware and sample files are binary; the CRT defaults to text. */
+    _fmode = _O_BINARY;
+#endif
     options o;
     int parsed = parse(argc, argv, &o);
     if (parsed) { if (parsed < 0) usage(); return parsed < 0 ? 2 : 0; }
@@ -623,6 +766,10 @@ int main(int argc, char **argv) {
     unsigned initial_x = 0, initial_y = 0;
     uint64_t renders = 0, renders_base = 0, last_render = 0, last_status = 0, smoke_down_ns = 0;
     char error[512] = {0}, delivery_error[512] = {0};
+#ifdef _WIN32
+    char *card_folder = NULL;
+#endif
+    int drops_in_folder = 0;
     if (o.record_log) {
         record = fopen(o.record_log, "wx");
         if (!record) { snprintf(error, sizeof error, "Cannot create recording log: error=%d", errno); goto close; }
@@ -671,7 +818,10 @@ int main(int argc, char **argv) {
            o.fps, o.poll_ms, o.audio_frames, o.slice_us);
     ctx.conf = config_initialize((char *)o.config);
     m8_handheld_config_defaults(&ctx.conf);
-    if (!o.smoke && !o.headless) config_read(&ctx.conf);
+    if (!o.smoke && !o.headless) {
+        config_read(&ctx.conf);
+        if (m8_handheld_keyboard_migrate(&ctx.conf)) write_config(&ctx.conf);
+    }
     if (o.integer_scale) ctx.conf.integer_scaling = 1;
     ctx.conf.audio_enabled = 1;
     ctx.app_state = RUN; ctx.device_connected = 1;
@@ -721,6 +871,21 @@ int main(int argc, char **argv) {
         if (m8_card_protect_file(card, o.firmware)) {
             snprintf(error, sizeof error, "%s", m8_card_error(card)); goto close;
         }
+#ifdef _WIN32
+        /* Browsable mirror and FAT32 card: settle the card file before the M8 loads it. */
+        if (!m8_card_read_only(card) && rendered && !o.headless && !o.no_card_folder) {
+            card_folder = o.card_folder ? SDL_strdup(o.card_folder) : m8_card_folder_default();
+            if (card_folder) {
+                const char *dests[16];
+                char dest_text[16][300];
+                unsigned n = 0;
+                for (unsigned d = 0; d < o.drop_count; ++d)
+                    if (!drop_destination(o.drops[d], dest_text[n], sizeof dest_text[n])) { dests[n] = dest_text[n]; o.drops[n++] = o.drops[d]; }
+                m8_card_folder_prepare(card, card_folder, o.drops, dests, n);
+                drops_in_folder = 1;
+            }
+        }
+#endif
     }
     /* Generated libraries derive from the firmware: CLI/environment, the
      * user's folder for this firmware, bundled lib/, else the reference engine. */
@@ -800,6 +965,16 @@ int main(int argc, char **argv) {
         snprintf(error, sizeof error, "Cannot enable PCM capture: field=1 value=1"); goto close;
     }
     if (o.import_folder && m8_media_import(s.rt, o.import_folder, o.overwrite, error, sizeof error)) goto close;
+    for (unsigned d = 0; d < o.drop_count && !drops_in_folder; ++d) {
+        char destination[300], failure[512];
+        if (drop_destination(o.drops[d], destination, sizeof destination)) {
+            snprintf(error, sizeof error, "Not a folder: %s", o.drops[d]); goto close;
+        }
+        if (m8_media_import_to(s.rt, o.drops[d], destination, o.overwrite, failure, sizeof failure)) {
+            snprintf(error, sizeof error, "Import of %s failed: %s", o.drops[d], failure); goto close;
+        }
+        printf("imported=%s destination=/%s\n", o.drops[d], destination);
+    }
     m8_bridge_attach(s.rt, rendered);
     if (o.latency) {
         l = calloc(1, sizeof *l);
@@ -944,6 +1119,12 @@ int main(int argc, char **argv) {
         SDL_Event event;
         while (SDL_PollEvent(&event)) {
             if (event.type == SDL_EVENT_WINDOW_FOCUS_LOST) m8_send_msg_controller(0);
+#ifdef _WIN32
+            if (rendered && card && !m8_card_read_only(card) && window_drop(&event, argc, argv, &o)) {
+                if (window_drop_confirmed) stop_requested = 1;
+                continue;
+            }
+#endif
             if (rendered && !settings_is_open() && !m8_gamepad_view_is_open() &&
                 m8_firmware_view_event(&ctx, &event)) continue;
             if (m8_handheld_event(&ctx, &event)) {
@@ -1038,10 +1219,17 @@ int main(int argc, char **argv) {
     if (card && !m8_card_read_only(card)) {
         if (m8_card_save(card, s.rt)) { snprintf(error, sizeof error, "%s", m8_card_error(card)); goto close; }
         printf("card_saved=%s backup=%s.bak\n", m8_card_path(card), m8_card_path(card));
+#ifdef _WIN32
+        if (card_folder) m8_card_folder_finish(card, s.rt, card_folder);
+#endif
     } else if (card) printf("card_read_only=%s saved=0\n", m8_card_path(card));
     /* A delivery diagnostic must not discard successfully written card files.
      * Storage still has its independent runtime/export/publication guards. */
-    if (*delivery_error) snprintf(error, sizeof error, "%s", delivery_error);
+    /* In an ordinary windowed session a glitch (a dialog, a busy system)
+     * is worth logging but is not a failed run; test modes still fail. */
+    int interactive = rendered && !o.headless && !o.demo && !o.smoke && !o.latency && !o.project && !o.pcm;
+    if (*delivery_error && interactive) { printf("audio_warning=%s\n", delivery_error); result = 0; }
+    else if (*delivery_error) snprintf(error, sizeof error, "%s", delivery_error);
     else result = 0;
 close:
     m8_engine_view_shutdown();

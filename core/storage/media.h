@@ -6,11 +6,20 @@
 /* Merge a host folder into private runtime storage before its first run.
  * FAT16 geometry and image size stay fixed. Names, empty directories and
  * file bytes are preserved; allocation and timestamps can change.
- * Existing files require overwrite. File/directory conflicts, case-folded
+ * Identical existing files are skipped; different ones require overwrite.
+ * File/directory conflicts, case-folded
  * duplicates, links, special files and read-only storage are refused.
  * Failure leaves the complete runtime image and source card unchanged. */
 int m8_media_import(m8rt *runtime, const char *directory, int overwrite,
                     char *error, size_t error_capacity);
+/* As m8_media_import, with the folder's contents placed under the card path
+ * destination (for example "Samples/Drums"); NULL or "" is the card root. */
+int m8_media_import_to(m8rt *runtime, const char *directory, const char *destination,
+                       int overwrite, char *error, size_t error_capacity);
+/* Rebuild the whole card from a host folder before the first run: the card
+ * ends up holding exactly the folder's contents (deletions included). FAT16
+ * geometry, size and volume label stay fixed. Failure changes nothing. */
+int m8_media_replace(m8rt *runtime, const char *directory, char *error, size_t error_capacity);
 /* Export without creating or running a runtime. The destination must be a
  * new or empty directory. Every FAT path and chain is checked before any
  * host file is created. Links and special destinations are refused. */

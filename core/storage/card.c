@@ -151,9 +151,21 @@ int m8_card_save(m8_card *card, m8rt *runtime)
     if (m8rt_sd_prepare_export(runtime, 1))
         return fail(card, "Card save refused: %s", m8rt_error(runtime));
     size_t size = m8rt_sd_image_size(runtime);
-    if (m8_card_platform_save(card->files, size, runtime_read, runtime))
+    int all = 1;
+    const uint8_t *dirty = m8rt_sd_dirty_pages(runtime, &all);
+    if (m8_card_platform_save_pages(card->files, size, runtime_read, runtime, dirty, all, M8RT_SD_PAGE))
         return fail(card, "%s", m8_card_platform_error(card->files));
     card->saved = 1; card->failed = 0; card->error[0] = 0;
+    return 0;
+}
+void m8_card_refresh(m8_card *card)
+{
+    if (card) m8_card_platform_refresh(card->files);
+}
+int m8_card_replace_image(m8_card *card, const char *path)
+{
+    if (!card || card->failed) return -1;
+    if (m8_card_platform_replace(card->files, path)) return fail(card, "%s", m8_card_platform_error(card->files));
     return 0;
 }
 void m8_card_close(m8_card *card)

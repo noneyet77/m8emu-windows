@@ -23,4 +23,16 @@ int m8_card_platform_protect_file(m8_card_platform *card, const char *path);
 int m8_card_platform_save(m8_card_platform *card, size_t size,
                          m8_card_platform_reader reader, void *context);
 void m8_card_platform_close(m8_card_platform *card);
+/* Save only the pages set in dirty (bit per page_bytes, LSB first) in place,
+ * through a journal that is replayed on the next open if interrupted. With
+ * all set, or where unsupported, this is m8_card_platform_save. No set
+ * pages and !all: nothing is written. */
+int m8_card_platform_save_pages(m8_card_platform *card, size_t size, m8_card_platform_reader reader,
+                                void *context, const unsigned char *dirty, int all, size_t page_bytes);
+/* Replace the card file with the image at path (same folder), keeping the
+ * previous card as .bak. Only before a runtime has loaded the card. */
+int m8_card_platform_replace(m8_card_platform *card, const char *path);
+/* Accept the card file's current size and time as the session's own (after
+ * a deliberate resize under the lock, before a runtime loads it). */
+void m8_card_platform_refresh(m8_card_platform *card);
 #endif

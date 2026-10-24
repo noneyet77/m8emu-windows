@@ -124,6 +124,12 @@ int m8rt_nor_flush(m8rt *rt)
     stage = "file close";
     if (close(fd)) { fd = -1; error = errno; goto failure; }
     fd = -1;
+#ifdef _WIN32
+    /* Windows cannot open or sync a directory as a file; the replacing
+     * rename (win_compat.h) is MOVEFILE_WRITE_THROUGH instead. */
+    stage = "rename";
+    if (rename(temporary, n->path)) { error = errno; goto failure; }
+#else
     stage = "directory open";
     dirfd = open(directory, O_RDONLY);
     if (dirfd < 0) { error = errno; goto failure; }
@@ -131,7 +137,9 @@ int m8rt_nor_flush(m8rt *rt)
     if (rename(temporary, n->path)) { error = errno; goto failure; }
     stage = "directory fsync";
     if (fsync(dirfd)) { error = errno; goto failure; }
-    close(dirfd); free(temporary); free(directory);
+    close(dirfd);
+#endif
+    free(temporary); free(directory);
     n->dirty = false;
     ++n->flushes;
     return 0;

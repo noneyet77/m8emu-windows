@@ -5,6 +5,11 @@
  * source image. Attach and image copies are allowed only outside emulation. */
 int m8rt_sd_replace_image(m8rt *rt, const void *data, size_t n);
 size_t m8rt_sd_image_size(m8rt *rt);
+/* Pages of M8RT_SD_PAGE bytes written since the image was loaded, one bit
+ * per page (LSB first). *all is set when the whole image must be treated
+ * as written (it was replaced). NULL when unknown. */
+#define M8RT_SD_PAGE 4096u
+const uint8_t *m8rt_sd_dirty_pages(m8rt *rt, int *all);
 uint64_t m8rt_sd_image_revision(m8rt *rt);
 int m8rt_sd_copy_image(m8rt *rt, void *out, size_t n);
 /* Copy an image interval while the execution owner is stopped. This is an

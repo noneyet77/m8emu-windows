@@ -22,9 +22,28 @@ static struct {
     signed char axes[SDL_GAMEPAD_AXIS_COUNT];
 } input_devices[M8_MAX_GAMEPADS];
 
+/* Keyboard layout: Space = PLAY, X = EDIT, Z = OPTION, Shift = SHIFT.
+ * The alternates keep m8c's modifier keys (Alt = OPTION, Ctrl = EDIT). */
+static void keyboard_layout(config_params_s *conf) {
+    conf->key_select = SDL_SCANCODE_LSHIFT; conf->key_select_alt = SDL_SCANCODE_RSHIFT;
+    conf->key_start = SDL_SCANCODE_SPACE; conf->key_start_alt = SDL_SCANCODE_SPACE;
+    conf->key_opt = SDL_SCANCODE_Z; conf->key_opt_alt = SDL_SCANCODE_LALT;
+    conf->key_edit = SDL_SCANCODE_X; conf->key_edit_alt = SDL_SCANCODE_LCTRL;
+}
 void m8_handheld_config_defaults(config_params_s *conf) {
     conf->gamepad_select = SDL_GAMEPAD_BUTTON_WEST;
     conf->gamepad_start = SDL_GAMEPAD_BUTTON_NORTH;
+    keyboard_layout(conf);
+}
+int m8_handheld_keyboard_migrate(config_params_s *conf) {
+    /* A config.ini still holding m8c's stock layout was written by an
+     * earlier run, not chosen by the user: move it to this layout. */
+    if (conf->key_select != SDL_SCANCODE_LSHIFT || conf->key_select_alt != SDL_SCANCODE_Z ||
+        conf->key_start != SDL_SCANCODE_SPACE || conf->key_start_alt != SDL_SCANCODE_X ||
+        conf->key_opt != SDL_SCANCODE_LALT || conf->key_opt_alt != SDL_SCANCODE_A ||
+        conf->key_edit != SDL_SCANCODE_LCTRL || conf->key_edit_alt != SDL_SCANCODE_S) return 0;
+    keyboard_layout(conf);
+    return 1;
 }
 
 static char *options_path(void) {

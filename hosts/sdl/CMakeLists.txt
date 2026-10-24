@@ -130,6 +130,13 @@ else()
   set_source_files_properties(${M8C}/render.c PROPERTIES COMPILE_OPTIONS "-include;${COMMON}/render_platform.h")
   set_source_files_properties(${M8C}/settings.c PROPERTIES COMPILE_OPTIONS "-include;${COMMON}/settings_platform.h")
 endif()
+if(WIN32)
+  set(M8_CARD_PLATFORM_SOURCE ${PLATFORM}/card_platform_win32.c)
+  set(M8_MEDIA_PLATFORM_SOURCE ${PLATFORM}/media_platform_win32.c)
+else()
+  set(M8_CARD_PLATFORM_SOURCE ${PLATFORM}/card_platform_posix.c)
+  set(M8_MEDIA_PLATFORM_SOURCE ${PLATFORM}/media_platform_posix.c)
+endif()
 add_executable(m8emu main.c metrics.c profiling.c
   ${PLATFORM}/pc-profile.c ${PLATFORM}/host-pmu.c
   ${COMMON}/audio.c ${COMMON}/audio_clock_sdl.c ${COMMON}/bridge.c
@@ -137,8 +144,37 @@ add_executable(m8emu main.c metrics.c profiling.c
   ${COMMON}/queue.c ${COMMON}/worker.c ${PLATFORM}/thread_policy.c ${COMMON}/handheld.c ${COMMON}/gamepad_view.c
   ${COMMON}/m8_ui.c ${COMMON}/firmware.c ${COMMON}/firmware_view.c ${COMMON}/user_paths.c ${COMMON}/engine_select.c
   ${COMMON}/engine_builder.c ${COMMON}/engine_view.c
-  ${STORAGE}/card.c ${PLATFORM}/card_platform_posix.c ${COMMON}/demo.c ${COMMON}/session.c
-  ${STORAGE}/media.c ${PLATFORM}/media_platform_posix.c ${COMMON}/render_platform.c ${COMMON}/host_probe.c)
+  ${STORAGE}/card.c ${M8_CARD_PLATFORM_SOURCE} ${COMMON}/demo.c ${COMMON}/session.c
+  ${STORAGE}/media.c ${M8_MEDIA_PLATFORM_SOURCE} ${COMMON}/render_platform.c ${COMMON}/host_probe.c)
+if(WIN32)
+  # UTF-8 code page manifest, POSIX shims, and the runtime DLLs beside the exe
+  # (Windows resolves DLLs from the executable's own folder).
+  enable_language(RC)
+  target_sources(m8emu PRIVATE ${CMAKE_CURRENT_LIST_DIR}/windows/m8emu.rc ${CMAKE_CURRENT_LIST_DIR}/windows/win_launch.c
+    ${CMAKE_CURRENT_LIST_DIR}/windows/card_folder.c
+    ${STORAGE}/fat32.c)
+  target_include_directories(m8emu PRIVATE ${CMAKE_CURRENT_LIST_DIR}/windows)
+  set_target_properties(m8emu PROPERTIES WIN32_EXECUTABLE TRUE)
+  set_source_files_properties(${CMAKE_CURRENT_LIST_DIR}/windows/m8emu.rc PROPERTIES
+    OBJECT_DEPENDS ${CMAKE_CURRENT_LIST_DIR}/windows/m8emu.manifest)
+  target_compile_options(m8emu PRIVATE $<$<COMPILE_LANGUAGE:C>:-include$<SEMICOLON>${PLATFORM}/win_compat.h>)
+  set(m8_windows_dlls)
+  foreach(m8_dll IN ITEMS libgcc_s_seh-1.dll libwinpthread-1.dll libssp-0.dll)
+    execute_process(COMMAND ${CMAKE_C_COMPILER} -print-file-name=${m8_dll}
+      OUTPUT_VARIABLE m8_dll_path OUTPUT_STRIP_TRAILING_WHITESPACE)
+    if(IS_ABSOLUTE "${m8_dll_path}" AND EXISTS "${m8_dll_path}")
+      list(APPEND m8_windows_dlls "${m8_dll_path}")
+    endif()
+  endforeach()
+  add_custom_command(TARGET m8emu POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_RUNTIME_DLLS:m8emu> ${m8_windows_dlls}
+      "$<TARGET_FILE_DIR:m8emu>"
+    COMMAND_EXPAND_LISTS)
+  if(TARGET unicorn)
+    add_custom_command(TARGET m8emu POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:unicorn>" "$<TARGET_FILE_DIR:m8emu>")
+  endif()
+endif()
 target_include_directories(m8emu PRIVATE ${COMMON} ${M8RT}/third_party ${PLATFORM})
 if(APPLE)
   target_sources(m8emu PRIVATE ${COMMON}/audio_coreaudio.c)

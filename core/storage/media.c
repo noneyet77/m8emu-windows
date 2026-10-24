@@ -1867,7 +1867,9 @@ static int merge(media *m,node *target,node *source,int overwrite)
         if(!old){if(m8_media_add_child(m,target,incoming))return -1;source->children[i]=NULL;}
         else if(old->directory && incoming->directory){if(merge(m,old,incoming,overwrite))return -1;}
         else if(old->directory!=incoming->directory)return m8_media_fail(m,"File/directory conflict: %s",incoming->name);
-        else if(!overwrite)return m8_media_fail(m,"File exists; use --overwrite to replace it: %s",incoming->name);
+        /* Identical content is already there: nothing to replace. */
+        else if(old->size==incoming->size && (!old->size || !memcmp(old->data,incoming->data,old->size)))continue;
+        else if(!overwrite)return m8_media_fail(m,"A different file with this name is already on the card: %s",incoming->name);
         else{free(old->data);old->data=incoming->data;old->size=incoming->size;incoming->data=NULL;incoming->size=0;}
     }
     return 0;
@@ -1980,7 +1982,37 @@ static void finish(media *m,node *root,char *error,size_t capacity)
     if(error && capacity)snprintf(error,capacity,"%s",m->error);
     m8_media_free_node(root);free(m->used);free(m->image);
 }
+/* Nest a scanned folder's contents under a card path such as "Samples/Drums". */
+static node *place(media *m,node *incoming,const char *destination)
+{
+    if(!destination || !*destination)return incoming;
+    node *top=m8_media_new_node(m,"",1),*parent=top;
+    if(!top){m8_media_free_node(incoming);return NULL;}
+    const char *p=destination;
+    while(*p){
+        while(*p=='/')p++;
+        const char *end=strchr(p,'/');size_t n=end?(size_t)(end-p):strlen(p);
+        if(!n)break;
+        char name[256];
+        if(n>=sizeof name){m8_media_fail(m,"Card path component too long");goto failed;}
+        memcpy(name,p,n);name[n]=0;p+=n;
+        node *child=m8_media_new_node(m,name,1);
+        if(!child || m8_media_add_child(m,parent,child)){m8_media_free_node(child);goto failed;}
+        parent=child;
+    }
+    parent->children=incoming->children;parent->child_count=incoming->child_count;
+    parent->child_capacity=incoming->child_capacity;
+    incoming->children=NULL;incoming->child_count=incoming->child_capacity=0;
+    m8_media_free_node(incoming);
+    return top;
+failed:
+    m8_media_free_node(incoming);m8_media_free_node(top);return NULL;
+}
 int m8_media_import(m8rt *rt,const char *directory,int overwrite,char *error,size_t capacity)
+{
+    return m8_media_import_to(rt,directory,NULL,overwrite,error,capacity);
+}
+int m8_media_import_to(m8rt *rt,const char *directory,const char *destination,int overwrite,char *error,size_t capacity)
 {
     media m={0};node *root=NULL,*incoming=NULL,*verified=NULL;int result=-1;
     if(!rt || !directory){m8_media_fail(&m,"Import needs a runtime and directory");goto done;}
@@ -1990,6 +2022,7 @@ int m8_media_import(m8rt *rt,const char *directory,int overwrite,char *error,siz
     if(!m.image || m8rt_sd_copy_image(rt,m.image,m.image_size)){m8_media_fail(&m,"Cannot copy private image for import");goto done;}
     root=image_tree(&m);if(!root)goto done;
     incoming=m8_media_platform_read_folder(&m,directory);if(!incoming)goto done;
+    incoming=place(&m,incoming,destination);if(!incoming)goto done;
     if(merge(&m,root,incoming,overwrite) || pack(&m,root))goto done;
     free(m.used);m.used=NULL;
     verified=image_tree(&m);if(!verified || same_tree(&m,root,verified))goto done;
@@ -1997,6 +2030,25 @@ int m8_media_import(m8rt *rt,const char *directory,int overwrite,char *error,siz
     result=0;
 done:
     m8_media_free_node(incoming);m8_media_free_node(verified);finish(&m,root,error,capacity);return result;
+}
+
+int m8_media_replace(m8rt *rt,const char *directory,char *error,size_t capacity)
+{
+    media m={0};node *root=NULL,*current=NULL,*verified=NULL;int result=-1;
+    if(!rt || !directory){m8_media_fail(&m,"Replace needs a runtime and directory");goto done;}
+    if(m8rt_get(rt,M8RT_SLICES)){m8_media_fail(&m,"Replace must precede guest execution");goto done;}
+    if(m8rt_sd_prepare_export(rt,0)){m8_media_fail(&m,"Replace refused: %s",m8rt_error(rt));goto done;}
+    m.image_size=m8rt_sd_image_size(rt);m.image=malloc(m.image_size);
+    if(!m.image || m8rt_sd_copy_image(rt,m.image,m.image_size)){m8_media_fail(&m,"Cannot copy private image for replace");goto done;}
+    current=image_tree(&m);if(!current)goto done;      /* geometry and label */
+    root=m8_media_platform_read_folder(&m,directory);if(!root)goto done;
+    if(pack(&m,root))goto done;
+    free(m.used);m.used=NULL;
+    verified=image_tree(&m);if(!verified || same_tree(&m,root,verified))goto done;
+    if(m8rt_sd_replace_image(rt,m.image,m.image_size)){m8_media_fail(&m,"Cannot replace private runtime image");goto done;}
+    result=0;
+done:
+    m8_media_free_node(current);m8_media_free_node(verified);finish(&m,root,error,capacity);return result;
 }
 
 int m8_media_export(const char *image,const char *directory,char *error,size_t capacity)

@@ -14,11 +14,32 @@
 #endif
 /* Legacy external engines do not supply the layout guard. Keep their original
  * memory API path instead of enabling unchecked host-buffer copies. */
+#ifdef _WIN32
+/* PE weak externals cannot bind to a DLL import; the pinned Unicorn fork
+ * always exports this guard, so Windows links it directly. */
+extern const uint64_t *uc_m8_memory_generation(uc_engine *);
+#define M8_HAVE_MEMORY_GENERATION 1
+#else
 extern const uint64_t *uc_m8_memory_generation(uc_engine *)
     __attribute__((weak, visibility("default")));
+#define M8_HAVE_MEMORY_GENERATION (uc_m8_memory_generation != NULL)
+#endif
 #if defined(__linux__) || defined(__APPLE__)
 #include <sys/mman.h>
 #include <unistd.h>
+#endif
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+/* Page-aligned owned buffers; released with m8_page_free, never free(). */
+static int m8_page_alloc(void **p,size_t size) {
+    *p=VirtualAlloc(NULL,size,MEM_RESERVE|MEM_COMMIT,PAGE_READWRITE);
+    return *p?0:-1;
+}
+static void m8_page_free(void *p) { if(p) VirtualFree(p,0,MEM_RELEASE); }
+#else
+static int m8_page_alloc(void **p,size_t size) { return posix_memalign(p,4096,size); }
+static void m8_page_free(void *p) { free(p); }
 #endif
 
 #define USB_BASE 0x402e0000u
@@ -946,6 +967,15 @@ static int reserve_guest_memory(m8rt *rt) {
     rt->memory_reservation=p;rt->memory_reservation_size=size;
     rt->memory_offset=(uint8_t *)p+page;
     return 0;
+#elif defined(_WIN32) && UINTPTR_MAX > UINT32_MAX
+    /* Same layout as mmap(PROT_NONE): reserve only; map_buffer commits. */
+    const size_t page=4096;
+    size_t size=UINT64_C(0x100000000)+2*page;
+    void *p=VirtualAlloc(NULL,size,MEM_RESERVE,PAGE_NOACCESS);
+    if(!p) return -1;
+    rt->memory_reservation=p;rt->memory_reservation_size=size;
+    rt->memory_offset=(uint8_t *)p+page;
+    return 0;
 #else
     (void)rt;
     return -1;
@@ -958,11 +988,14 @@ static int map_buffer(m8rt *rt,m8_region *r,uint32_t base,uint32_t size,unsigned
 #if defined(__linux__) || defined(__APPLE__)
         p=rt->memory_offset+(size_t)base;
         if(mprotect(p,size,PROT_READ|PROT_WRITE)) return -1;
+#elif defined(_WIN32)
+        p=rt->memory_offset+(size_t)base;
+        if(!VirtualAlloc(p,size,MEM_COMMIT,PAGE_READWRITE)) return -1;
 #else
         return -1;
 #endif
     } else {
-        if(posix_memalign(&p,4096,size)) return -1;
+        if(m8_page_alloc(&p,size)) return -1;
         memset(p,0,size);
     }
     *r=(m8_region){p,base,size}; return (int)uc_mem_map_ptr(rt->uc,base,size,perms,p);
@@ -1027,7 +1060,11 @@ m8rt *m8rt_create_aot(const char *firmware,const char *image,const m8rt_options 
     rt->rom=rom.host;rt->dwt=dwt.host;
     rt->memory.ctx=rt;rt->memory.read=slow_read;rt->memory.write=slow_write;
     if(load_firmware(rt,firmware)) { m8rt_fail(rt,"firmware load failed: %s",firmware); return rt; }
-    if(m8rt_mmio_init(rt) || m8rt_nor_init(rt) || m8rt_usb_init(rt) || m8rt_sd_init(rt,image)) { if(!rt->fatal) m8rt_fail(rt,"device initialization failed");return rt; }
+    {
+        const char *device=m8rt_mmio_init(rt)?"MMIO":m8rt_nor_init(rt)?"NOR flash":m8rt_usb_init(rt)?"USB":
+            m8rt_sd_init(rt,image)?"SD card (image file or temporary file)":NULL;
+        if(device) { if(!rt->fatal) m8rt_fail(rt,"device initialization failed: %s",device);return rt; }
+    }
     if(image) {
         char *path=malloc(strlen(image)+sizeof(".settings.nor"));
         if(!path) {m8rt_fail(rt,"NOR image path allocation failed");return rt;}
@@ -1052,7 +1089,7 @@ m8rt *m8rt_create_aot(const char *firmware,const char *image,const m8rt_options 
     if(!err) err=uc_context_save(rt->uc,rt->reset_context);
     if(err) m8rt_fail(rt,"reset CPU context: %s",uc_strerror(err));
     if(!rt->fatal && !rt->deterministic_clock) m8rt_stall_init(rt);
-    if(!rt->fatal && direct_requested && uc_m8_memory_generation) {
+    if(!rt->fatal && direct_requested && M8_HAVE_MEMORY_GENERATION) {
         rt->direct_memory_generation=uc_m8_memory_generation(rt->uc);
         if(rt->direct_memory_generation) {
             rt->direct_memory_expected_generation=*rt->direct_memory_generation;
@@ -1078,11 +1115,13 @@ void m8rt_destroy(m8rt *rt) {
     if(rt->memory_reservation) {
 #if defined(__linux__) || defined(__APPLE__)
         munmap(rt->memory_reservation,rt->memory_reservation_size);
+#elif defined(_WIN32)
+        VirtualFree(rt->memory_reservation,0,MEM_RELEASE);
 #endif
     } else {
-        free(rt->memory.itcm.host);free(rt->memory.dtcm.host);free(rt->memory.ocram.host);free(rt->memory.flash.host);free(rt->rom);
+        m8_page_free(rt->memory.itcm.host);m8_page_free(rt->memory.dtcm.host);m8_page_free(rt->memory.ocram.host);m8_page_free(rt->memory.flash.host);m8_page_free(rt->rom);
     }
-    free(rt->dwt);
+    m8_page_free(rt->dwt);
 #ifdef M8RT_GUEST_PC_PROFILE
     free(rt->guest_pcs);
 #endif

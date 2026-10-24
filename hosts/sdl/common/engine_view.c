@@ -71,8 +71,11 @@ void m8_engine_view_attach(struct app_context *ctx, const char *firmware, int us
         snprintf(text, sizeof text, "ENGINE %s", rejected);
         view.built = true;
         relabel();
-        /* The screen opens once on a fresh launch; a rebuild is one EDIT away. */
+        /* The screen opens once on a fresh launch; a rebuild is one EDIT away.
+         * Windows cannot build engines yet, so there it stays behind F4. */
+#ifndef _WIN32
         if (!m8_firmware_view_is_open()) m8_firmware_view_toggle(ctx);
+#endif
         notice(text, true, 20);
     }
 }

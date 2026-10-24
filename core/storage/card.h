@@ -25,6 +25,11 @@ int m8_card_protect_file(m8_card *card, const char *path);
  * The caller must apply m8_card_read_only via m8rt_sd_set_read_only before
  * guest execution. A read-only or failed session is never published. */
 int m8_card_save(m8_card *card, m8rt *runtime);
+/* Swap in a freshly built card image (same folder) before a runtime loads
+ * the card; the previous card becomes .bak. */
+int m8_card_replace_image(m8_card *card, const char *path);
+/* Accept a deliberate resize of the card file (before a runtime loads it). */
+void m8_card_refresh(m8_card *card);
 void m8_card_close(m8_card *card);
 /* Fresh 16 MiB demo medium in memory; no persistent card is opened. */
 int m8_card_empty_runtime(m8rt *runtime);

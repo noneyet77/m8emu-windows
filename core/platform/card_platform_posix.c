@@ -383,3 +383,18 @@ void m8_card_platform_close(m8_card_platform *card)
     }
     free(card->path); free(card->backup); free(card->directory); free(card->lock); free(card);
 }
+int m8_card_platform_save_pages(m8_card_platform *card, size_t size, m8_card_platform_reader reader,
+                                void *context, const unsigned char *dirty, int all, size_t page_bytes)
+{
+    (void)dirty; (void)all; (void)page_bytes;
+    return m8_card_platform_save(card, size, reader, context);
+}
+int m8_card_platform_replace(m8_card_platform *card, const char *path)
+{
+    (void)path;
+    return fail(card, "Replacing the card file is not supported on this platform");
+}
+void m8_card_platform_refresh(m8_card_platform *card)
+{
+    if (card && card->source_fd >= 0) fstat(card->source_fd, &card->source_stat);
+}

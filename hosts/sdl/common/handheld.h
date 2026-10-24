@@ -21,6 +21,8 @@ extern SDL_Gamepad *game_controllers[M8_MAX_GAMEPADS];
 /* Apply before config_read(), so every user binding has priority. Face button
  * positions do not depend on the controller's printed letter names. */
 void m8_handheld_config_defaults(config_params_s *conf);
+/* Replace an untouched stock m8c keyboard layout; 1 when changed. */
+int m8_handheld_keyboard_migrate(config_params_s *conf);
 
 /* Call before SDL_AppEvent(). Back/Select and Start are reserved: a same-device
  * chord sets QUIT and releases the M8 mask, and a Back tap toggles the gamepad

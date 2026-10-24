@@ -250,6 +250,11 @@ add_library(m8rt
     ${M8RT_ENGINE_DIR}/native-live.c
     ${M8RT_ENGINE_DIR}/native-boot-app.c
     ${M8RT_PLATFORM_DIR}/stall.c)
+if(WIN32)
+    # POSIX shims for the few CRT differences outside core/platform.
+    target_compile_options(m8rt PRIVATE -include "${M8RT_PLATFORM_DIR}/win_compat.h")
+    target_sources(m8rt PRIVATE ${M8RT_PLATFORM_DIR}/win_compat.c)
+endif()
 add_library(m8::runtime ALIAS m8rt)
 target_compile_definitions(m8rt PRIVATE M8RT_DIRECT_MEMORY_DEFAULT=$<BOOL:${M8RT_DIRECT_MEMORY}>)
 target_compile_definitions(m8rt PRIVATE M8RT_CALLBACK_TIMING_DEFAULT=$<BOOL:${M8_RT_CALLBACK_TIMING}>)

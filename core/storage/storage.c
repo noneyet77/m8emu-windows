@@ -6,6 +6,88 @@
 #include <inttypes.h>
 #include <errno.h>
 #include <unistd.h>
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#include "win_utf8.h"
+/* Lazily loaded card: the image's address range is reserved, and a 64 KiB
+ * piece is committed and read from the card file the first time anything
+ * touches it (a vectored exception handler catches the access). Untouched
+ * parts of a large card cost neither memory nor time, and nothing is
+ * charged up front. */
+#define LAZY_CHUNK ((size_t)64 * 1024)
+typedef struct { uint8_t *base; size_t size; HANDLE file; } lazy_region;
+static lazy_region lazy[4];
+static SRWLOCK lazy_lock = SRWLOCK_INIT;
+static PVOID lazy_handler;
+static LONG CALLBACK lazy_fault(EXCEPTION_POINTERS *e)
+{
+    if (e->ExceptionRecord->ExceptionCode != EXCEPTION_ACCESS_VIOLATION || e->ExceptionRecord->NumberParameters < 2)
+        return EXCEPTION_CONTINUE_SEARCH;
+    uint8_t *address = (uint8_t *)e->ExceptionRecord->ExceptionInformation[1];
+    LONG verdict = EXCEPTION_CONTINUE_SEARCH;
+    AcquireSRWLockExclusive(&lazy_lock);
+    for (unsigned i = 0; i < sizeof lazy / sizeof *lazy; ++i) {
+        lazy_region *r = &lazy[i];
+        if (!r->base || address < r->base || address >= r->base + r->size) continue;
+        size_t offset = (size_t)(address - r->base) & ~(LAZY_CHUNK - 1);
+        size_t n = r->size - offset < LAZY_CHUNK ? r->size - offset : LAZY_CHUNK;
+        MEMORY_BASIC_INFORMATION info;
+        if (VirtualQuery(r->base + offset, &info, sizeof info) && info.State == MEM_COMMIT) {
+            verdict = EXCEPTION_CONTINUE_EXECUTION;   /* another thread loaded it */
+            break;
+        }
+        if (!VirtualAlloc(r->base + offset, n, MEM_COMMIT, PAGE_READWRITE)) break;
+        uint8_t *p = r->base + offset;
+        uint64_t at = offset;
+        size_t left = n;
+        while (left) {
+            OVERLAPPED o = {0};
+            o.Offset = (DWORD)(at & 0xffffffffu); o.OffsetHigh = (DWORD)(at >> 32);
+            DWORD got = 0;
+            if (!ReadFile(r->file, p, (DWORD)left, &got, &o) || !got) break;  /* holes stay zero */
+            p += got; at += got; left -= got;
+        }
+        verdict = EXCEPTION_CONTINUE_EXECUTION;
+        break;
+    }
+    ReleaseSRWLockExclusive(&lazy_lock);
+    return verdict;
+}
+static uint8_t *lazy_open(const char *path, size_t *size)
+{
+    wchar_t *wide = u8_widen(path);
+    HANDLE file = wide ? CreateFileW(wide, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                     NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL) : INVALID_HANDLE_VALUE;
+    free(wide);
+    LARGE_INTEGER length = {0};
+    if (file == INVALID_HANDLE_VALUE) return NULL;
+    if (!GetFileSizeEx(file, &length) || length.QuadPart <= 0 || (uint64_t)length.QuadPart > SIZE_MAX
+        || length.QuadPart % 512) { CloseHandle(file); return NULL; }
+    uint8_t *base = VirtualAlloc(NULL, (size_t)length.QuadPart, MEM_RESERVE, PAGE_NOACCESS);
+    if (!base) { CloseHandle(file); return NULL; }
+    AcquireSRWLockExclusive(&lazy_lock);
+    unsigned slot = 0;
+    while (slot < sizeof lazy / sizeof *lazy && lazy[slot].base) ++slot;
+    if (slot == sizeof lazy / sizeof *lazy) {
+        ReleaseSRWLockExclusive(&lazy_lock);
+        VirtualFree(base, 0, MEM_RELEASE); CloseHandle(file); return NULL;
+    }
+    lazy[slot] = (lazy_region){base, (size_t)length.QuadPart, file};
+    if (!lazy_handler) lazy_handler = AddVectoredExceptionHandler(1, lazy_fault);
+    ReleaseSRWLockExclusive(&lazy_lock);
+    *size = (size_t)length.QuadPart;
+    return base;
+}
+static void lazy_close(uint8_t *base)
+{
+    AcquireSRWLockExclusive(&lazy_lock);
+    for (unsigned i = 0; i < sizeof lazy / sizeof *lazy; ++i)
+        if (lazy[i].base == base) { CloseHandle(lazy[i].file); lazy[i] = (lazy_region){0}; }
+    ReleaseSRWLockExclusive(&lazy_lock);
+    VirtualFree(base, 0, MEM_RELEASE);
+}
+#endif
 
 #define SD_LO UINT32_C(0x402c0000)
 #define SD_HI UINT32_C(0x402c8000)
@@ -54,6 +136,9 @@ typedef struct {
 struct m8rt_sd {
     uint8_t *image;
     size_t image_size;
+    /* Pages written since the image was loaded (bit per M8RT_SD_PAGE). */
+    uint8_t *dirty;
+    bool all_dirty, mapped;
     FILE *private_file;
     sd_controller controller[SD_CONTROLLERS];
     uint64_t pio_words, started, completed, cancelled, errors, pending, bytes_accepted, image_revision;
@@ -243,12 +328,19 @@ static void complete_cmd6_dma(m8rt *rt, uint32_t base, uint32_t arg)
         c->guard = true; c->guard_cmd = 6; c->guard_arg = arg;
     }
 }
+static void mark_dirty(m8rt_sd *sd, size_t offset, size_t n)
+{
+    if (!sd->dirty || !n) return;
+    for (size_t page = offset / M8RT_SD_PAGE, last = (offset + n - 1) / M8RT_SD_PAGE; page <= last; ++page)
+        sd->dirty[page >> 3] |= (uint8_t)(1u << (page & 7));
+}
 static void image_write(m8rt_sd *sd, size_t offset, const uint8_t *src, size_t n)
 {
     if (n) sd->image_revision++;
     while (n) {
         size_t part = sd->image_size - offset;
         if (part > n) part = n;
+        mark_dirty(sd, offset, part);
         memcpy(sd->image + offset, src, part);
         src += part; n -= part; offset = 0;
     }
@@ -384,6 +476,19 @@ int m8rt_sd_init(m8rt *rt, const char *path)
     if (!sd->private_file) { m8rt_sd_destroy(rt); return -1; }
     size_t n = 4u * 1024 * 1024;
     FILE *source = NULL;
+#ifdef _WIN32
+    /* Load the card lazily (see lazy_open): the file itself is untouched
+     * until saved, and a large, mostly empty card costs little. */
+    if (path) {
+        size_t length = 0;
+        uint8_t *view = lazy_open(path, &length);
+        if (!view) { m8rt_sd_destroy(rt); return -1; }
+        sd->image = view; sd->image_size = length; sd->mapped = true;
+        sd->dirty = calloc((sd->image_size / M8RT_SD_PAGE + 8) / 8, 1);
+        if (!sd->dirty) { m8rt_sd_destroy(rt); return -1; }
+        return 0;
+    }
+#endif
     if (path) {
         source = fopen(path, "rb");
         if (!source || fseek(source, 0, SEEK_END) || ftell(source) <= 0) {
@@ -397,6 +502,7 @@ int m8rt_sd_init(m8rt *rt, const char *path)
         n = (size_t)length;
     }
     sd->image = calloc(1, n); sd->image_size = n;
+    sd->dirty = calloc((n / M8RT_SD_PAGE + 8) / 8, 1);
     if (!sd->image || (source && fread(sd->image, 1, n, source) != n)) {
         if (source) fclose(source);
         m8rt_sd_destroy(rt); return -1;
@@ -407,7 +513,11 @@ int m8rt_sd_init(m8rt *rt, const char *path)
 void m8rt_sd_destroy(m8rt *rt)
 {
     if (!rt->sd) return;
+#ifdef _WIN32
+    if (rt->sd->mapped) lazy_close(rt->sd->image); else
+#endif
     free(rt->sd->image);
+    free(rt->sd->dirty);
     if (rt->sd->private_file) fclose(rt->sd->private_file);
     free(rt->sd); rt->sd = NULL;
 }
@@ -570,12 +680,25 @@ int m8rt_sd_replace_image(m8rt *rt, const void *data, size_t n)
     uint8_t *replacement = malloc(n);
     if (!replacement) return -1;
     memcpy(replacement, data, n);
-    free(rt->sd->image); rt->sd->image = replacement; rt->sd->image_size = n;
+    uint8_t *dirty = calloc((n / M8RT_SD_PAGE + 8) / 8, 1);
+    if (!dirty) { free(replacement); return -1; }
+#ifdef _WIN32
+    if (rt->sd->mapped) lazy_close(rt->sd->image); else
+#endif
+    free(rt->sd->image);
+    free(rt->sd->dirty);
+    rt->sd->image = replacement; rt->sd->image_size = n; rt->sd->mapped = false;
+    rt->sd->dirty = dirty; rt->sd->all_dirty = true;
     rt->sd->image_revision++;
     return 0;
 }
 uint64_t m8rt_sd_image_revision(m8rt *rt) { return rt && rt->sd ? rt->sd->image_revision : 0; }
 size_t m8rt_sd_image_size(m8rt *rt) { return rt && rt->sd ? rt->sd->image_size : 0; }
+const uint8_t *m8rt_sd_dirty_pages(m8rt *rt, int *all)
+{
+    if (all) *all = rt && rt->sd ? rt->sd->all_dirty : 1;
+    return rt && rt->sd ? rt->sd->dirty : NULL;
+}
 int m8rt_sd_copy_image(m8rt *rt, void *out, size_t n)
 {
     if (!rt || !rt->sd || rt->in_emu || !out || n != rt->sd->image_size) return -1;

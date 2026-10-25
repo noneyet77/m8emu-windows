@@ -23,6 +23,16 @@ engine). The native/AOT engine and PGO are not ported yet.
 4. The app is `build/windows/m8emu.exe`. The DLLs and `firmware/` beside it
    must stay in the same folder. Run it from that folder or double-click it.
 
+## Single-executable release
+
+`cmake --preset windows-release && cmake --build --preset windows-release`
+(or `windows-release-cross` from Linux) links everything statically into one
+`m8emu.exe` with no DLLs, the gamepad database and version info embedded.
+The Headless firmware is never part of it: on first run the app asks for the
+`.hex` from Dirtywave. Pushing a tag such as `v0.1.0` runs
+`.github/workflows/windows-release.yml`, which builds that exe and attaches
+it to the GitHub release with `docs/release-notes.md` as its text.
+
 ## Cross-build from Linux
 
 Install `mingw-w64` (posix threads variant), `cmake` and `ninja`, then:

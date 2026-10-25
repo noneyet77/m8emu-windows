@@ -150,15 +150,48 @@ if(WIN32)
   # UTF-8 code page manifest, POSIX shims, and the runtime DLLs beside the exe
   # (Windows resolves DLLs from the executable's own folder).
   enable_language(RC)
-  target_sources(m8emu PRIVATE ${CMAKE_CURRENT_LIST_DIR}/windows/m8emu.rc ${CMAKE_CURRENT_LIST_DIR}/windows/win_launch.c
+  file(READ "${M8_ROOT}/VERSION" M8_VERSION_TEXT)
+  string(STRIP "${M8_VERSION_TEXT}" M8_VERSION_TEXT)
+  string(REPLACE "." "," M8_VERSION_COMMAS "${M8_VERSION_TEXT}")
+  set(M8_RC "${CMAKE_CURRENT_BINARY_DIR}/m8emu_generated.rc")
+  file(WRITE "${M8_RC}" "#include <winver.h>
+#include <winuser.h>
+CREATEPROCESS_MANIFEST_RESOURCE_ID RT_MANIFEST \"${CMAKE_CURRENT_LIST_DIR}/windows/m8emu.manifest\"
+GAMECONTROLLERDB RCDATA \"${M8_ROOT}/third_party/m8c/gamecontrollerdb.txt\"
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION ${M8_VERSION_COMMAS},0
+PRODUCTVERSION ${M8_VERSION_COMMAS},0
+BEGIN
+  BLOCK \"StringFileInfo\"
+  BEGIN
+    BLOCK \"040904b0\"
+    BEGIN
+      VALUE \"FileDescription\", \"M8 Headless emulator\"
+      VALUE \"FileVersion\", \"${M8_VERSION_TEXT}\"
+      VALUE \"ProductName\", \"m8emu for Windows\"
+      VALUE \"ProductVersion\", \"${M8_VERSION_TEXT}\"
+      VALUE \"OriginalFilename\", \"m8emu.exe\"
+    END
+  END
+  BLOCK \"VarFileInfo\"
+  BEGIN
+    VALUE \"Translation\", 0x409, 1200
+  END
+END
+")
+  target_sources(m8emu PRIVATE ${M8_RC} ${CMAKE_CURRENT_LIST_DIR}/windows/win_launch.c
     ${CMAKE_CURRENT_LIST_DIR}/windows/card_folder.c
     ${CMAKE_CURRENT_LIST_DIR}/windows/midi_win.c
     ${STORAGE}/fat32.c)
   target_include_directories(m8emu PRIVATE ${CMAKE_CURRENT_LIST_DIR}/windows)
   set_target_properties(m8emu PROPERTIES WIN32_EXECUTABLE TRUE)
   target_link_libraries(m8emu PRIVATE winmm)
-  set_source_files_properties(${CMAKE_CURRENT_LIST_DIR}/windows/m8emu.rc PROPERTIES
-    OBJECT_DEPENDS ${CMAKE_CURRENT_LIST_DIR}/windows/m8emu.manifest)
+  set_source_files_properties(${M8_RC} PROPERTIES
+    OBJECT_DEPENDS "${CMAKE_CURRENT_LIST_DIR}/windows/m8emu.manifest;${M8_ROOT}/third_party/m8c/gamecontrollerdb.txt")
+  if(NOT BUILD_SHARED_LIBS)
+    # One self-contained executable: no compiler runtime DLLs either.
+    target_link_options(m8emu PRIVATE -static -static-libgcc)
+  endif()
   target_compile_options(m8emu PRIVATE $<$<COMPILE_LANGUAGE:C>:-include$<SEMICOLON>${PLATFORM}/win_compat.h>)
   set(m8_windows_dlls)
   foreach(m8_dll IN ITEMS libgcc_s_seh-1.dll libwinpthread-1.dll libssp-0.dll)
@@ -168,11 +201,13 @@ if(WIN32)
       list(APPEND m8_windows_dlls "${m8_dll_path}")
     endif()
   endforeach()
+  if(BUILD_SHARED_LIBS)
   add_custom_command(TARGET m8emu POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_RUNTIME_DLLS:m8emu> ${m8_windows_dlls}
       "$<TARGET_FILE_DIR:m8emu>"
     COMMAND_EXPAND_LISTS)
-  if(TARGET unicorn)
+  endif()
+  if(TARGET unicorn AND BUILD_SHARED_LIBS)
     add_custom_command(TARGET m8emu POST_BUILD
       COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:unicorn>" "$<TARGET_FILE_DIR:m8emu>")
   endif()

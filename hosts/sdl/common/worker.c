@@ -17,6 +17,12 @@ struct m8_worker {
     m8_session *s;
     m8_worker_options options;
     m8_queue input, display;
+    /* External MIDI: 4-byte records {length, status, data1, data2}. midi_in
+     * may be written from several driver threads, so writes take midi_lock. */
+    m8_queue midi_in, midi_out;
+    SDL_Mutex *midi_lock;
+    _Atomic int midi;
+    _Atomic uint64_t midi_dropped;
     SDL_Thread *thread;
     SDL_Mutex *state_mutex;
     m8_worker_state state;
@@ -66,6 +72,20 @@ static int input(void *context) {
             w->options.control(w->options.control_context, c.phase, c.input_ns);
         if (c.size && m8rt_queue_host_bytes(w->s->rt, c.data, c.size) < 0) return -1;
         ++w->inputs;
+    }
+    if (atomic_load_explicit(&w->midi, memory_order_acquire)) {
+        unsigned char m[4], out[16];
+        while (m8_queue_read(&w->midi_in, m, sizeof m)) {
+            int r = m8rt_midi_send(w->s->rt, m + 1, m[0]);
+            if (r == -1) return -1;
+            if (r) atomic_fetch_add(&w->midi_dropped, 1);   /* invalid or guest queue full */
+        }
+        size_t n;
+        while ((n = m8rt_midi_read_timed(w->s->rt, out, sizeof out, NULL)) > 0) {
+            if (n > 3 || out[0] == 0xf0) continue;            /* SysEx out is not routed */
+            m[0] = (unsigned char)n; memcpy(m + 1, out, n);
+            if (m8_queue_write(&w->midi_out, m, sizeof m)) atomic_fetch_add(&w->midi_dropped, 1);
+        }
     }
     return 0;
 }
@@ -270,7 +290,9 @@ m8_worker *m8_worker_start(m8_session *s, const m8_worker_options *options) {
     if (!w) return NULL;
     w->s = s; w->options = *options;
     w->state_mutex = SDL_CreateMutex();
-    if (!w->state_mutex || m8_queue_init(&w->input, 8192) ||
+    w->midi_lock = SDL_CreateMutex();
+    if (!w->state_mutex || !w->midi_lock || m8_queue_init(&w->input, 8192) ||
+        m8_queue_init(&w->midi_in, 16384) || m8_queue_init(&w->midi_out, 16384) ||
         m8_queue_init(&w->display, options->display_capacity ? options->display_capacity : 262144)) goto failed;
     w->thread = SDL_CreateThread(run, "m8-guest", w);
     if (!w->thread) goto failed;
@@ -278,6 +300,26 @@ m8_worker *m8_worker_start(m8_session *s, const m8_worker_options *options) {
 failed:
     m8_worker_destroy(w); return NULL;
 }
+void m8_worker_enable_midi(m8_worker *w) {
+    if (w) atomic_store_explicit(&w->midi, 1, memory_order_release);
+}
+int m8_worker_midi_in(m8_worker *w, const void *message, size_t n) {
+    if (!w || !n || n > 3 || atomic_load_explicit(&w->done, memory_order_acquire)) return -1;
+    unsigned char m[4] = {(unsigned char)n};
+    memcpy(m + 1, message, n);
+    SDL_LockMutex(w->midi_lock);
+    int r = m8_queue_write(&w->midi_in, m, sizeof m);
+    SDL_UnlockMutex(w->midi_lock);
+    if (r) atomic_fetch_add(&w->midi_dropped, 1);
+    return r;
+}
+size_t m8_worker_midi_out(m8_worker *w, void *message, size_t capacity) {
+    unsigned char m[4];
+    if (!w || capacity < 3 || !m8_queue_read(&w->midi_out, m, sizeof m)) return 0;
+    memcpy(message, m + 1, m[0]);
+    return m[0];
+}
+uint64_t m8_worker_midi_dropped(m8_worker *w) { return w ? atomic_load(&w->midi_dropped) : 0; }
 int m8_worker_send(void *context, const void *bytes, size_t n) {
     m8_worker *w = context;
     if (!w || n > 8 || atomic_load_explicit(&w->done, memory_order_acquire)) return -1;
@@ -316,5 +358,7 @@ void m8_worker_destroy(m8_worker *w) {
     if (!w) return;
     m8_worker_stop(w); m8_worker_join(w);
     m8_queue_close(&w->input); m8_queue_close(&w->display);
+    m8_queue_close(&w->midi_in); m8_queue_close(&w->midi_out);
+    SDL_DestroyMutex(w->midi_lock);
     SDL_DestroyMutex(w->state_mutex); free(w);
 }

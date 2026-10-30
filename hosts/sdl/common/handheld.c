@@ -1,3 +1,7 @@
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#endif
 #include "handheld.h"
 #include "gamepad_view.h"
 #include "bridge.h"
@@ -141,6 +145,20 @@ static int initialize_database(void) {
     if (loaded < 0) return -1;
     if (!loaded) loaded = load_database(SDL_GetBasePath());
     if (loaded < 0) return -1;
+#ifdef _WIN32
+    if (!loaded) {
+        /* Single-executable release: the database is embedded as a resource. */
+        HRSRC resource = FindResourceA(NULL, "GAMECONTROLLERDB", MAKEINTRESOURCEA(10) /* RT_RCDATA */);
+        HGLOBAL data = resource ? LoadResource(NULL, resource) : NULL;
+        const void *bytes = data ? LockResource(data) : NULL;
+        if (bytes) {
+            int count = SDL_AddGamepadMappingsFromIO(SDL_IOFromConstMem(bytes, SizeofResource(NULL, resource)), true);
+            if (count < 0) return -1;
+            SDL_Log("Loaded %d built-in gamepad mappings", count);
+            loaded = 1;
+        }
+    }
+#endif
     if (!loaded) SDL_Log("No gamecontrollerdb.txt found; using SDL built-in mappings");
     return 0;
 }

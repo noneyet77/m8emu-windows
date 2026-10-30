@@ -1,0 +1,51 @@
+# Builds the single-executable Windows release when a tag like v0.1.0 is
+# pushed (or a release is created with a new tag), and attaches it to the
+# GitHub release. The Headless firmware is never included in the release.
+name: Windows release
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            git
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-ninja
+            mingw-w64-x86_64-python
+      - name: Build
+        run: |
+          cmake --preset windows-release
+          cmake --build --preset windows-release
+      - name: Package
+        run: |
+          version=$(tr -d '[:space:]' < VERSION)
+          mkdir -p dist
+          strip -o "dist/m8emu-${version}-windows-x64.exe" build/windows-release/m8emu.exe
+          ls -l dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: m8emu-windows-x64
+          path: dist/*.exe
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.exe
+          body_path: docs/release-notes.md

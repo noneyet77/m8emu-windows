@@ -147,6 +147,43 @@
         "M8_PORTABLE_BUNDLE": "OFF",
         "M8_PGO": "OFF"
       }
+    },
+    {
+      "name": "windows-release",
+      "displayName": "Windows x64 single-executable release (MSYS2 MinGW)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      },
+      "cacheVariables": {
+        "BUILD_SHARED_LIBS": "OFF",
+        "M8_BUILD_DESKTOP": "ON",
+        "M8_BUILD_BENCH": "OFF",
+        "BUILD_TESTING": "OFF",
+        "CMAKE_BUILD_TYPE": "Release",
+        "M8_PORTABLE_BUNDLE": "OFF",
+        "M8_PGO": "OFF",
+        "CMAKE_C_COMPILER": "gcc"
+      }
+    },
+    {
+      "name": "windows-release-cross",
+      "displayName": "Windows x64 single-executable release, cross-built",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "toolchainFile": "${sourceDir}/cmake/toolchains/mingw-w64-x86_64.cmake",
+      "cacheVariables": {
+        "BUILD_SHARED_LIBS": "OFF",
+        "M8_BUILD_DESKTOP": "ON",
+        "M8_BUILD_BENCH": "OFF",
+        "BUILD_TESTING": "OFF",
+        "CMAKE_BUILD_TYPE": "Release",
+        "M8_PORTABLE_BUNDLE": "OFF",
+        "M8_PGO": "OFF"
+      }
     }
   ],
   "buildPresets": [
@@ -180,6 +217,14 @@
     {
       "name": "windows-cross",
       "configurePreset": "windows-cross"
+    },
+    {
+      "name": "windows-release",
+      "configurePreset": "windows-release"
+    },
+    {
+      "name": "windows-release-cross",
+      "configurePreset": "windows-release-cross"
     }
   ]
 }

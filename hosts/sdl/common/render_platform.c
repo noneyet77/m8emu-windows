@@ -56,7 +56,23 @@ bool m8_create_window_renderer(const char *name, int w, int h, SDL_WindowFlags f
     return true;
 }
 bool m8_set_vsync(SDL_Renderer *renderer, int interval) {
+#ifdef _WIN32
+    /* Desktop Windows: honour the caller (m8c asks for 1) unless --vsync was
+     * given. With vsync off, SDL's Direct3D renderer presents with tearing
+     * allowed, which shows as flicker during playback. Best effort: a driver
+     * that refuses keeps running without vsync. */
+    if (requested_vsync < 0) {
+        bool on = SDL_SetRenderVSync(renderer, interval);
+        if (!on) SDL_SetRenderVSync(renderer, 0);
+        int actual = 0;
+        SDL_GetRenderVSync(renderer, &actual);
+        const char *backend = SDL_GetRendererName(renderer);
+        SDL_Log("video renderer=%s vsync=%d", backend ? backend : "?", actual);
+        return true;
+    }
+#else
     (void)interval;
+#endif
     return SDL_SetRenderVSync(renderer, requested_vsync >= 0 ? requested_vsync : 0);
 }
 bool m8_render_present(SDL_Renderer *renderer) {

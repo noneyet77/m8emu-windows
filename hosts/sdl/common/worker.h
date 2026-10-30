@@ -37,6 +37,13 @@ typedef struct m8_worker_state {
 m8_worker *m8_worker_start(m8_session *session, const m8_worker_options *options);
 /* SDL main-thread producer. Input exhaustion is explicit; no packet is lost. */
 int m8_worker_send(void *worker, const void *bytes, size_t n);
+/* External MIDI (enable after m8rt_set_midi(rt, 1), before or after start).
+ * midi_in: one complete short message (1-3 bytes), any thread.
+ * midi_out: next message the M8 sent (0 when none), one reader thread. */
+void m8_worker_enable_midi(m8_worker *worker);
+int m8_worker_midi_in(m8_worker *worker, const void *message, size_t n);
+size_t m8_worker_midi_out(m8_worker *worker, void *message, size_t capacity);
+uint64_t m8_worker_midi_dropped(m8_worker *worker);
 int m8_worker_control(m8_worker *worker, unsigned phase, uint64_t input_ns);
 /* SDL main-thread consumer. reset=1 means clear renderer/decoder, then redraw. */
 size_t m8_worker_display(m8_worker *, void *bytes, size_t n, int *reset);

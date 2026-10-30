@@ -1,5 +1,4 @@
-# m8emu-macos
+# m8emu-windows
 
-This project is discontinued. I contacted Dirtywave and decided not to develop it further.
+This project is just for me
 
-There are no builds or releases.

@@ -1,7 +1,16 @@
+## m8emu for Windows 0.1.1
+
+### Fixed
+
+- Flicker during playback: vsync is now on by default on Windows. With it
+  off, Direct3D presented frames mid-refresh (tearing), which screen
+  recordings do not show. `m8emu.log` records the renderer and vsync state
+  (`video renderer=... vsync=1`); `--vsync 0` turns it off again.
+
 ## m8emu for Windows 0.1.0
 
 A Windows build of the m8emu Dirtywave M8 Headless emulator, as one
-executable (`m8emu-0.1.0-windows-x64.exe`). Windows 10 (1903) or newer, x64.
+executable (`m8emu-0.1.1-windows-x64.exe`). Windows 10 (1903) or newer, x64.
 
 ### First run
 

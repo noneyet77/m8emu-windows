@@ -1,25 +1,34 @@
-## m8emu for Windows 0.1.1
+## m8emu 0.1.2 for Windows and macOS
 
-### Fixed
+Two downloads, same version:
 
-- Flicker during playback: vsync is now on by default on Windows. With it
-  off, Direct3D presented frames mid-refresh (tearing), which screen
-  recordings do not show. `m8emu.log` records the renderer and vsync state
-  (`video renderer=... vsync=1`); `--vsync 0` turns it off again.
+- **Windows:** `m8emu-0.1.2-windows-x64.exe`, the whole app in one file.
+  Windows 10 (1903) or newer, x64.
+- **macOS:** `m8emu-0.1.2-macos-arm64.dmg`, with a self-contained
+  `m8emu.app` inside. Apple Silicon, macOS 13 or newer.
 
-## m8emu for Windows 0.1.0
+The M8 Headless firmware is **not included** in either. Get
+`M8_V6_5_2C_HEADLESS.hex` free from Dirtywave, then pick it in the app
+(**CHOOSE FILE...**) or drop it on the window. It is kept from then on.
 
-A Windows build of the m8emu Dirtywave M8 Headless emulator, as one
-executable (`m8emu-0.1.1-windows-x64.exe`). Windows 10 (1903) or newer, x64.
+### First launch
 
-### First run
+- **Windows:** SmartScreen says "Windows protected your PC" because the exe
+  isn't code-signed. Click **More info**, then **Run anyway**.
+- **macOS:** open the dmg and drag m8emu onto Applications. The app isn't
+  notarized, so run this once in Terminal before the first launch:
+  `xattr -dr com.apple.quarantine /Applications/m8emu.app`
+  (or try to open it, then System Settings > Privacy & Security >
+  **Open Anyway**).
 
-The M8 Headless firmware is **not included**. Get it free from Dirtywave
-(the M8 Headless firmware page), then start `m8emu.exe` and either click
-**CHOOSE FILE...** and pick `M8_V6_5_2C_HEADLESS.hex`, or drop the `.hex` onto
-the window. It is stored in `%APPDATA%\m8-live\firmware` and used from then on.
+### New in 0.1.2
 
-### Features
+- macOS build added to the release, built and packaged automatically
+  alongside the Windows exe.
+- The macOS app runs the reference engine out of the box; F4 opens the
+  firmware screen, where it can build the faster native engine on your Mac.
+
+### Windows
 
 - Reference engine (Unicorn) running the original firmware; audio, display,
   keyboard and gamepads through SDL3
@@ -32,9 +41,13 @@ the window. It is stored in `%APPDATA%\m8-live\firmware` and used from then on.
 - External USB MIDI in and out, with hotplug
 - Journaled card saves; a crashed session's work goes to
   `M8 Card (rescued DATE)`
+- Vsync on by default (fixes flicker during playback); `--vsync 0` turns
+  it off
 - `m8emu.log` next to the exe, and a message box on any error
 
 ### Not yet
 
-- Native/AOT fast engine (phase 2)
+- The Windows-only extras above (M8 Card folder, self-sizing card, USB MIDI,
+  drag-and-drop import) on macOS
+- Native/AOT fast engine on Windows
 - MIDI SysEx
